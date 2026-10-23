@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>DO Snake — DO Games</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="stylesheet" href="common.css">
+<style>
+  .dpad{display:flex;flex-direction:column;align-items:center;gap:5px;padding:8px 0 calc(10px + env(safe-area-inset-bottom));z-index:5}
+  .dpad .row{display:flex;gap:5px}
+  .dpad button{
+    width:58px;height:46px;border-radius:12px;border:1px solid rgba(196,176,250,.4);cursor:pointer;
+    background:rgba(42,26,77,.85);color:var(--cream);font-size:19px;font-weight:800;font-family:inherit;
+  }
+  .dpad button:active{background:var(--purple)}
+  .dpad .arr{display:block;width:0;height:0;margin:0 auto;border-left:8px solid transparent;border-right:8px solid transparent}
+  .arr.up{border-bottom:13px solid var(--cream)}
+  .arr.down{border-top:13px solid var(--cream)}
+  .arr.left{border-top:8px solid transparent;border-bottom:8px solid transparent;border-right:13px solid var(--cream);border-left:none}
+  .arr.right{border-top:8px solid transparent;border-bottom:8px solid transparent;border-left:13px solid var(--cream);border-right:none}
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="topbar">
+    <a class="back" href="index.html">‹ Lobby</a>
+    <span class="gtitle">DO Snake</span>
+    <div class="hud">
+      <div class="hud-box"><div class="lbl">Score</div><div class="val" id="scoreVal">0</div></div>
+      <div class="hud-box"><div class="lbl">Cookies</div><div class="val" id="countVal">0</div></div>
+    </div>
+  </div>
+  <div class="playfield">
+    <canvas class="game" id="game"></canvas>
+
+    <div class="overlay" id="menuScreen">
+      <div class="big">DO Snake</div>
+      <div class="howto">
+        Swipe, use the arrows, or tap the pad to steer.<br>
+        Cookies are <b>+25</b> — and every <b>5th cookie is golden, +60</b>.<br>
+        Walls and your own tail end the run.
+      </div>
+      <div class="rowbtns"><button class="btn" id="playBtn" type="button">Play</button></div>
+      <div class="bestline" id="menuBest"></div>
+    </div>
+
+    <div class="overlay hidden" id="overScreen">
+      <div class="big">Crunched!</div>
+      <div class="final">Final score<b id="finalScore">0</b></div>
+      <div class="bestline" id="overBest"></div>
+      <div class="status" id="submitStatus"></div>
+      <div class="rowbtns">
+        <button class="btn" id="againBtn" type="button">Play again</button>
+        <a class="btn ghost" href="index.html" style="text-decoration:none;display:inline-block">Lobby</a>
+      </div>
+    </div>
+  </div>
+  <div class="dpad" id="dpad">
+    <div class="row"><button type="button" data-dir="up"><span class="arr up"></span></button></div>
+    <div class="row">
+      <button type="button" data-dir="left"><span class="arr left"></span></button>
+      <button type="button" data-dir="down"><span class="arr down"></span></button>
+      <button type="button" data-dir="right"><span class="arr right"></span></button>
+    </div>
+  </div>
+</div>
+
+<script src="common.js"></script>
+<script>
+(function () {
+  'use strict';
+  var N = 16; // 16 x 16 grid
+  var canvas = document.getElementById('game');
+  var ctx = canvas.getContext('2d');
+  var scoreEl = document.getElementById('scoreVal');
+  var countEl = document.getElementById('countVal');
+  var menuEl = document.getElementById('menuScreen');
+  var overEl = document.getElementById('overScreen');
+  var statusEl = document.getElementById('submitStatus');
+  var W = 0, H = 0, cell = 20, offX = 0, offY = 0;
+
+  var G = {
+    state: 'menu', snake: [], dir: { x: 1, y: 0 }, nextDir: { x: 1, y: 0 },
+    food: null, spawnCount: 0, regular: 0, golden: 0, score: 0,
+    acc: 0, elapsed: 0, submitted: false,
+  };
+
+  function resize() {
+    var r = canvas.parentElement.getBoundingClientRect();
+    var DPR = Math.min(2, window.devicePixelRatio || 1);
+    W = Math.max(280, r.width); H = Math.max(280, r.height);
+    canvas.width = Math.round(W * DPR); canvas.height = Math.round(H * DPR);
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    cell = Math.floor(Math.min(W, H) / N);
+    offX = Math.floor((W - cell * N) / 2);
+    offY = Math.floor((H - cell * N) / 2);
+  }
+  window.addEventListener('resize', resize);
+
+  function tickMs() {
+    var total = G.regular + G.golden;
+    return Math.max(85, 140 - total * 2);
+  }
+
+  function spawnFood() {
+    G.spawnCount++;
+    var golden = G.spawnCount % 5 === 0;
+    var free = [];
+    var occ = {};
+    G.snake.forEach(function (s) { occ[s.x + ',' + s.y] = true; });
+    for (var x = 0; x < N; x++) for (var y = 0; y < N; y++) if (!occ[x + ',' + y]) free.push({ x: x, y: y });
+    if (!free.length) { G.food = null; return; }
+    var p = free[Math.floor(Math.random() * free.length)];
+    G.food = { x: p.x, y: p.y, golden: golden };
+  }
+
+  function setDir(x, y) {
+    if (G.state !== 'playing') return;
+    if (G.snake.length > 1 && x === -G.dir.x && y === -G.dir.y) return; // no reversing
+    G.nextDir = { x: x, y: y };
+  }
+
+  function startGame() {
+    G.state = 'playing';
+    G.snake = [{ x: 7, y: 8 }, { x: 6, y: 8 }, { x: 5, y: 8 }, { x: 4, y: 8 }];
+    G.dir = { x: 1, y: 0 }; G.nextDir = { x: 1, y: 0 };
+    G.spawnCount = 0; G.regular = 0; G.golden = 0; G.score = 0;
+    G.acc = 0; G.elapsed = 0; G.submitted = false;
+    spawnFood();
+    menuEl.classList.add('hidden'); overEl.classList.add('hidden');
+    syncHud();
+  }
+
+  function step() {
+    G.dir = G.nextDir;
+    var head = { x: G.snake[0].x + G.dir.x, y: G.snake[0].y + G.dir.y };
+    if (head.x < 0 || head.y < 0 || head.x >= N || head.y >= N) { endGame(); return; }
+    for (var i = 0; i < G.snake.length - 1; i++) {
+      if (G.snake[i].x === head.x && G.snake[i].y === head.y) { endGame(); return; }
+    }
+    G.snake.unshift(head);
+    if (G.food && head.x === G.food.x && head.y === G.food.y) {
+      if (G.food.golden) { G.golden++; G.score += 60; } else { G.regular++; G.score += 25; }
+      spawnFood();
+      syncHud();
+    } else {
+      G.snake.pop();
+    }
+  }
+
+  function syncHud() {
+    scoreEl.textContent = String(G.score);
+    countEl.textContent = String(G.regular + G.golden);
+  }
+
+  function endGame() {
+    if (G.state !== 'playing') return;
+    G.state = 'over';
+    var durationMs = Math.round(G.elapsed * 1000);
+    document.getElementById('finalScore').textContent = String(G.score);
+    var best = window.DoGames.saveLocalBest('snake', G.score);
+    document.getElementById('overBest').textContent = 'Best: ' + best + ' · ' + (G.regular + G.golden) + ' cookies (' + G.golden + ' golden)';
+    overEl.classList.remove('hidden');
+    window.DoGames.submitRun('snake', { regular: G.regular, golden: G.golden, durationMs: durationMs }, statusEl);
+  }
+
+  function update(dt) {
+    if (G.state !== 'playing') return;
+    G.elapsed += dt;
+    G.acc += dt * 1000;
+    var tick = tickMs();
+    while (G.acc >= tick && G.state === 'playing') {
+      G.acc -= tick;
+      step();
+      tick = tickMs();
+    }
+  }
+
+  function render() {
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = 'rgba(21,10,40,.55)';
+    ctx.fillRect(offX, offY, cell * N, cell * N);
+    ctx.strokeStyle = 'rgba(196,176,250,.16)';
+    ctx.lineWidth = 1;
+    for (var i = 0; i <= N; i++) {
+      ctx.beginPath(); ctx.moveTo(offX + i * cell, offY); ctx.lineTo(offX + i * cell, offY + cell * N); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(offX, offY + i * cell); ctx.lineTo(offX + cell * N, offY + i * cell); ctx.stroke();
+    }
+    if (G.food) {
+      var fx = offX + G.food.x * cell + cell / 2, fy = offY + G.food.y * cell + cell / 2;
+      if (G.food.golden) { ctx.shadowColor = '#f5b921'; ctx.shadowBlur = 12; }
+      ctx.beginPath(); ctx.arc(fx, fy, cell * 0.36, 0, Math.PI * 2);
+      ctx.fillStyle = G.food.golden ? '#f0b429' : '#c98a4b'; ctx.fill();
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = '#4a2a12';
+      ctx.beginPath(); ctx.arc(fx - 3, fy - 2, 2, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(fx + 3, fy + 3, 2, 0, Math.PI * 2); ctx.fill();
+    }
+    for (var s = G.snake.length - 1; s >= 0; s--) {
+      var seg = G.snake[s];
+      var x = offX + seg.x * cell, y = offY + seg.y * cell;
+      ctx.fillStyle = s === 0 ? '#3f9e57' : '#58c472';
+      ctx.beginPath(); ctx.rect(x + 1.5, y + 1.5, cell - 3, cell - 3); ctx.fill();
+      if (s === 0) {
+        ctx.fillStyle = '#123';
+        var ex = G.dir.x, ey = G.dir.y;
+        ctx.beginPath(); ctx.arc(x + cell / 2 + ex * 4 - ey * 4, y + cell / 2 + ey * 4 - ex * 4, 2.2, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(x + cell / 2 + ex * 4 + ey * 4, y + cell / 2 + ey * 4 + ex * 4, 2.2, 0, Math.PI * 2); ctx.fill();
+      }
+    }
+  }
+
+  var lastT = 0;
+  function frame(ts) {
+    var dt = Math.min(0.05, ((ts || 0) - lastT) / 1000 || 0.016);
+    lastT = ts || 0;
+    update(dt);
+    render();
+    window.requestAnimationFrame(frame);
+  }
+
+  var touchStart = null;
+  canvas.addEventListener('pointerdown', function (e) { touchStart = { x: e.clientX, y: e.clientY }; }, { passive: true });
+  canvas.addEventListener('pointerup', function (e) {
+    if (!touchStart) return;
+    var dx = e.clientX - touchStart.x, dy = e.clientY - touchStart.y;
+    touchStart = null;
+    if (Math.max(Math.abs(dx), Math.abs(dy)) < 18) return;
+    if (Math.abs(dx) > Math.abs(dy)) setDir(dx > 0 ? 1 : -1, 0); else setDir(0, dy > 0 ? 1 : -1);
+  }, { passive: true });
+  canvas.addEventListener('touchmove', function (e) { if (G.state === 'playing') e.preventDefault(); }, { passive: false });
+  document.querySelectorAll('#dpad button').forEach(function (b) {
+    b.addEventListener('pointerdown', function (e) {
+      e.preventDefault();
+      var d = b.dataset.dir;
+      if (d === 'up') setDir(0, -1); else if (d === 'down') setDir(0, 1);
+      else if (d === 'left') setDir(-1, 0); else setDir(1, 0);
+    });
+  });
+  window.addEventListener('keydown', function (e) {
+    if (e.key === 'ArrowUp' || e.key === 'w') { setDir(0, -1); e.preventDefault(); }
+    else if (e.key === 'ArrowDown' || e.key === 's') { setDir(0, 1); e.preventDefault(); }
+    else if (e.key === 'ArrowLeft' || e.key === 'a') { setDir(-1, 0); e.preventDefault(); }
+    else if (e.key === 'ArrowRight' || e.key === 'd') { setDir(1, 0); e.preventDefault(); }
+    else if ((e.key === ' ' || e.key === 'Enter') && G.state !== 'playing') startGame();
+  });
+
+  document.getElementById('playBtn').addEventListener('click', startGame);
+  document.getElementById('againBtn').addEventListener('click', startGame);
+  document.getElementById('menuBest').textContent = window.DoGames.localBest('snake') > 0 ? 'Best: ' + window.DoGames.localBest('snake') : '';
+  resize();
+  window.requestAnimationFrame(frame);
+
+  window.__doGame = { game: G, start: startGame, step: function (dt) { update(dt); }, stepOnce: step, setDir: setDir, end: endGame };
+})();
+</script>
+</body>
+</html>

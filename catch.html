@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>Cookie Catch — DO Games</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<div class="stage">
+  <div class="topbar">
+    <a class="back" href="index.html">‹ Lobby</a>
+    <span class="gtitle">Cookie Catch</span>
+    <div class="hud">
+      <div class="hud-box"><div class="lbl">Score</div><div class="val" id="scoreVal">0</div></div>
+      <div class="hud-box"><div class="lbl">Time</div><div class="val" id="timeVal">60</div></div>
+      <div class="hud-box"><div class="lbl">Lives</div><div class="val"><span class="lives-dots" id="livesDots"></span></div></div>
+    </div>
+  </div>
+  <div class="playfield">
+    <canvas class="game" id="game"></canvas>
+
+    <div class="overlay" id="menuScreen">
+      <div class="big">Cookie Catch</div>
+      <div class="howto">
+        Drag the jar to catch <b>cookies +10</b> and <b>golden cookies +30</b>.<br>
+        A <span class="bad">burnt cookie</span> in the jar is <span class="bad">−15 and a lost life</span> — 3 lives, 60 seconds.<br>
+        Dropping a good cookie costs nothing. It just hurts to watch.
+      </div>
+      <div class="rowbtns"><button class="btn" id="playBtn" type="button">Play</button></div>
+      <div class="bestline" id="menuBest"></div>
+    </div>
+
+    <div class="overlay hidden" id="overScreen">
+      <div class="big" id="overTitle">Time!</div>
+      <div class="final">Final score<b id="finalScore">0</b></div>
+      <div class="bestline" id="overBest"></div>
+      <div class="status" id="submitStatus"></div>
+      <div class="rowbtns">
+        <button class="btn" id="againBtn" type="button">Play again</button>
+        <a class="btn ghost" href="index.html" style="text-decoration:none;display:inline-block">Lobby</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="common.js"></script>
+<script>
+(function () {
+  'use strict';
+  var canvas = document.getElementById('game');
+  var ctx = canvas.getContext('2d');
+  var scoreEl = document.getElementById('scoreVal');
+  var timeEl = document.getElementById('timeVal');
+  var livesEl = document.getElementById('livesDots');
+  var menuEl = document.getElementById('menuScreen');
+  var overEl = document.getElementById('overScreen');
+  var statusEl = document.getElementById('submitStatus');
+  var W = 0, H = 0;
+
+  var G = {
+    state: 'menu', score: 0, lives: 3, time: 0, spawnT: 0, items: [], parts: [], texts: [],
+    jarX: 0, jarW: 92, jarH: 54, jarY: 0, itemR: 20, startAt: 0,
+    stats: null,
+  };
+
+  function resize() {
+    var r = canvas.parentElement.getBoundingClientRect();
+    var DPR = Math.min(2, window.devicePixelRatio || 1);
+    W = Math.max(280, r.width); H = Math.max(320, r.height);
+    canvas.width = Math.round(W * DPR); canvas.height = Math.round(H * DPR);
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    G.itemR = Math.max(15, Math.min(26, W * 0.052));
+    G.jarW = Math.max(74, G.itemR * 4.4);
+    G.jarY = H - G.jarH - 14;
+    if (!G.jarX) G.jarX = W / 2;
+    G.jarX = Math.max(G.jarW / 2, Math.min(W - G.jarW / 2, G.jarX));
+  }
+  window.addEventListener('resize', resize);
+
+  function pickType() {
+    var r = Math.random();
+    if (r < 0.12) return 'golden';
+    if (r < 0.27) return 'burnt';
+    return 'regular';
+  }
+  function spawnInterval() { return Math.max(0.38, 0.85 - G.time * 0.008); }
+  function fallSpeed() { return (H * 0.32) * (1 + Math.min(1.1, G.time / 80)) * (0.88 + Math.random() * 0.3); }
+  function spawnItem(type, x) {
+    var r = G.itemR * (0.9 + Math.random() * 0.25);
+    var it = {
+      type: type || pickType(), r: r, vy: fallSpeed(), rot: (Math.random() - 0.5) * 0.8,
+      x: (typeof x === 'number') ? x : (r + Math.random() * Math.max(1, W - r * 2)), y: -r - 4,
+    };
+    G.items.push(it);
+    return it;
+  }
+
+  function burst(x, y, color, n) {
+    for (var i = 0; i < (n || 8); i++) {
+      var a = Math.random() * Math.PI * 2, sp = 40 + Math.random() * 90;
+      G.parts.push({ x: x, y: y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 40, t: 0, life: 0.5, color: color });
+    }
+  }
+  function floatText(x, y, str, color) { G.texts.push({ x: x, y: y, str: str, color: color, t: 0, life: 0.9 }); }
+
+  function drawCookie(x, y, r, type, rot) {
+    ctx.save(); ctx.translate(x, y); ctx.rotate(rot || 0);
+    if (type === 'golden') { ctx.shadowColor = '#f5b921'; ctx.shadowBlur = 16; }
+    ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2);
+    ctx.fillStyle = type === 'golden' ? '#f0b429' : (type === 'burnt' ? '#4a3428' : '#c98a4b');
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.lineWidth = 2; ctx.strokeStyle = type === 'burnt' ? '#2a1c12' : '#8a4f24'; ctx.stroke();
+    ctx.fillStyle = type === 'burnt' ? '#241407' : '#4a2a12';
+    var chips = [[-0.35, -0.2], [0.3, -0.35], [0.05, 0.15], [-0.25, 0.4], [0.42, 0.3]];
+    for (var i = 0; i < chips.length; i++) {
+      ctx.beginPath(); ctx.arc(chips[i][0] * r, chips[i][1] * r, r * 0.14, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore();
+  }
+  function drawJar() {
+    var x = G.jarX - G.jarW / 2, y = G.jarY;
+    ctx.save();
+    ctx.beginPath();
+    // jar body: slightly tapered glass
+    ctx.moveTo(x + 6, y + 8); ctx.lineTo(x + G.jarW - 6, y + 8);
+    ctx.lineTo(x + G.jarW - 12, y + G.jarH); ctx.lineTo(x + 12, y + G.jarH);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(196,176,250,.20)'; ctx.fill();
+    ctx.lineWidth = 2.5; ctx.strokeStyle = 'rgba(247,234,215,.75)'; ctx.stroke();
+    ctx.beginPath(); ctx.ellipse(G.jarX, y + 8, G.jarW / 2 - 2, 7, 0, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(247,234,215,.28)'; ctx.fill();
+    // cookies already in the jar
+    ctx.beginPath(); ctx.arc(G.jarX - G.jarW * 0.18, y + G.jarH - 10, 9, 0, Math.PI * 2); ctx.fillStyle = '#c98a4b'; ctx.fill();
+    ctx.beginPath(); ctx.arc(G.jarX + G.jarW * 0.14, y + G.jarH - 8, 9, 0, Math.PI * 2); ctx.fillStyle = '#b5713d'; ctx.fill();
+    ctx.restore();
+  }
+
+  function syncHud() {
+    scoreEl.textContent = String(G.score);
+    timeEl.textContent = String(Math.max(0, Math.ceil(60 - G.time)));
+    livesEl.innerHTML = '';
+    for (var i = 0; i < 3; i++) {
+      var d = document.createElement('span');
+      d.className = 'dot' + (i < G.lives ? '' : ' off');
+      livesEl.appendChild(d);
+    }
+  }
+
+  function startGame() {
+    G.state = 'playing'; G.score = 0; G.lives = 3; G.time = 0; G.spawnT = 0.3;
+    G.items = []; G.parts = []; G.texts = [];
+    G.stats = { regular: 0, golden: 0, burnt: 0 };
+    G.startAt = Date.now();
+    menuEl.classList.add('hidden'); overEl.classList.add('hidden');
+    syncHud();
+  }
+
+  function endGame(reason) {
+    G.state = 'over';
+    var durationMs = Math.round(G.time * 1000);
+    document.getElementById('overTitle').textContent = reason === 'lives' ? 'Out of lives!' : 'Time!';
+    document.getElementById('finalScore').textContent = String(G.score);
+    var best = window.DoGames.saveLocalBest('catch', G.score);
+    document.getElementById('overBest').textContent = 'Best: ' + best;
+    overEl.classList.remove('hidden');
+    window.DoGames.submitRun('catch', {
+      regular: G.stats.regular, golden: G.stats.golden, burnt: G.stats.burnt, durationMs: durationMs,
+    }, statusEl);
+  }
+
+  function update(dt) {
+    if (G.state !== 'playing') return;
+    G.time += dt;
+    G.spawnT -= dt;
+    if (G.spawnT <= 0) { spawnItem(); G.spawnT = spawnInterval() * (0.8 + Math.random() * 0.4); }
+    var mouthY = G.jarY + 8;
+    for (var i = G.items.length - 1; i >= 0; i--) {
+      var it = G.items[i];
+      it.y += it.vy * dt;
+      if (it.y + it.r * 0.4 >= mouthY && it.y - it.r < mouthY + 14 && Math.abs(it.x - G.jarX) < G.jarW / 2 - 4) {
+        // caught
+        if (it.type === 'regular') { G.stats.regular++; G.score += 10; floatText(it.x, mouthY - 14, '+10', '#f7ead7'); burst(it.x, mouthY, '#c98a4b', 7); }
+        else if (it.type === 'golden') { G.stats.golden++; G.score += 30; floatText(it.x, mouthY - 14, '+30', '#f5b921'); burst(it.x, mouthY, '#f5b921', 12); }
+        else {
+          G.stats.burnt++; G.score = Math.max(0, G.score - 15); G.lives--;
+          floatText(it.x, mouthY - 14, '−15', '#ff8a7a'); burst(it.x, mouthY, '#46342a', 10);
+          if (G.lives <= 0) { G.items.splice(i, 1); syncHud(); endGame('lives'); return; }
+        }
+        G.items.splice(i, 1);
+        continue;
+      }
+      if (it.y - it.r > H) G.items.splice(i, 1); // dropped: no penalty
+    }
+    for (var p = G.parts.length - 1; p >= 0; p--) {
+      var pt = G.parts[p]; pt.t += dt; pt.x += pt.vx * dt; pt.y += pt.vy * dt; pt.vy += 300 * dt;
+      if (pt.t > pt.life) G.parts.splice(p, 1);
+    }
+    for (var t = G.texts.length - 1; t >= 0; t--) {
+      var tx = G.texts[t]; tx.t += dt; tx.y -= 34 * dt;
+      if (tx.t > tx.life) G.texts.splice(t, 1);
+    }
+    syncHud();
+    if (G.time >= 60) endGame('time');
+  }
+
+  function render() {
+    ctx.clearRect(0, 0, W, H);
+    var g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, 'rgba(76,29,149,.25)'); g.addColorStop(1, 'rgba(21,10,40,.1)');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    for (var i = 0; i < G.items.length; i++) drawCookie(G.items[i].x, G.items[i].y, G.items[i].r, G.items[i].type, G.items[i].rot);
+    drawJar();
+    for (var p = 0; p < G.parts.length; p++) {
+      var pt = G.parts[p];
+      ctx.globalAlpha = Math.max(0, 1 - pt.t / pt.life);
+      ctx.fillStyle = pt.color;
+      ctx.beginPath(); ctx.arc(pt.x, pt.y, 3, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    ctx.font = '800 16px -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx.textAlign = 'center';
+    for (var t = 0; t < G.texts.length; t++) {
+      var tx = G.texts[t];
+      ctx.globalAlpha = Math.max(0, 1 - tx.t / tx.life);
+      ctx.fillStyle = tx.color;
+      ctx.fillText(tx.str, tx.x, tx.y);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  var lastT = 0;
+  function frame(ts) {
+    var dt = Math.min(0.05, ((ts || 0) - lastT) / 1000 || 0.016);
+    lastT = ts || 0;
+    update(dt);
+    render();
+    window.requestAnimationFrame(frame);
+  }
+
+  function pointerX(e) { return e.clientX != null ? e.clientX : (e.touches && e.touches[0] ? e.touches[0].clientX : G.jarX); }
+  function onMove(e) { if (G.state === 'playing') G.jarX = Math.max(G.jarW / 2, Math.min(W - G.jarW / 2, pointerX(e))); }
+  canvas.addEventListener('pointermove', onMove, { passive: true });
+  canvas.addEventListener('pointerdown', onMove, { passive: true });
+  canvas.addEventListener('touchmove', function (e) { if (G.state === 'playing') e.preventDefault(); }, { passive: false });
+  document.addEventListener('visibilitychange', function () {
+    // Pausing would corrupt the run clock the server checks; runs are short — leave as is.
+  });
+
+  document.getElementById('playBtn').addEventListener('click', startGame);
+  document.getElementById('againBtn').addEventListener('click', startGame);
+
+  document.getElementById('menuBest').textContent = window.DoGames.localBest('catch') > 0 ? 'Best: ' + window.DoGames.localBest('catch') : '';
+  resize();
+  syncHud();
+  window.requestAnimationFrame(frame);
+
+  window.__doGame = { game: G, start: startGame, spawn: spawnItem, step: update, end: endGame };
+})();
+</script>
+</body>
+</html>

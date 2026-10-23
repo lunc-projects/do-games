@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>DO Mines — DO Games</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="stylesheet" href="common.css">
+<style>
+  .minezone{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:12px}
+  .grid{display:grid;grid-template-columns:repeat(5,1fr);gap:7px;width:min(330px,88vw)}
+  .tile{
+    aspect-ratio:1;border:none;border-radius:12px;cursor:pointer;font-family:inherit;
+    background:linear-gradient(160deg,#4c1d95,#2a1a4d);border:1px solid rgba(196,176,250,.45);
+    display:flex;align-items:center;justify-content:center;position:relative;
+  }
+  .tile .qm{width:14px;height:14px;border-radius:50%;background:radial-gradient(circle at 35% 30%,var(--dough),var(--cookie) 70%,var(--cookie-dk));opacity:.85}
+  .tile.safe{background:linear-gradient(160deg,#5b3a1e,#3d2412);border-color:rgba(233,184,114,.5);cursor:default}
+  .tile.safe .dotc{width:58%;height:58%;border-radius:50%;background:radial-gradient(circle at 35% 30%,var(--dough),var(--cookie) 68%,var(--cookie-dk));box-shadow:inset 0 -2px 4px rgba(90,45,10,.55)}
+  .tile.mine{background:#2a1c12;border-color:var(--red);cursor:default}
+  .tile.mine .bomb{width:56%;height:56%;border-radius:50%;background:#3a3a3a;box-shadow:inset -3px -4px 6px rgba(0,0,0,.6);position:relative}
+  .tile.mine .bomb::after{content:"";position:absolute;right:-16%;top:-22%;width:26%;height:26%;border-radius:50%;background:#f5b921}
+  .tile.dim{opacity:.45}
+  .bankline{text-align:center}
+  .bankline .bank{font-size:34px;font-weight:800;color:var(--gold);font-variant-numeric:tabular-nums}
+  .bankline .next{font-size:13.5px;opacity:.8}
+  .statusline{font-size:14.5px;min-height:19px;color:var(--gold);text-align:center;max-width:350px}
+  .msgline{font-size:16px;font-weight:700;min-height:21px;text-align:center}
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="topbar">
+    <a class="back" href="index.html">‹ Lobby</a>
+    <span class="gtitle">DO Mines</span>
+    <div class="hud">
+      <div class="hud-box"><div class="lbl">Best</div><div class="val" id="bestVal">0</div></div>
+    </div>
+  </div>
+  <div class="minezone">
+    <div class="bankline">
+      <div class="bank" id="bankVal">0</div>
+      <div class="next" id="nextVal">Reveal a tile to start banking</div>
+    </div>
+    <div class="grid" id="grid"></div>
+    <div class="msgline" id="msgLine"></div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:center">
+      <button class="btn" id="cashBtn" type="button" disabled>CASH OUT</button>
+      <button class="btn ghost" id="newBtn" type="button">New board</button>
+      <a class="btn ghost" href="index.html" style="text-decoration:none">Lobby</a>
+    </div>
+    <div style="font-size:13px;opacity:.75;text-align:center;max-width:330px;line-height:1.55">
+      25 tiles, 5 burnt mines hiding. Each safe tile adds more than the last
+      (1st +1, 2nd +2, 3rd +3…). Cash out to keep the bank — a mine takes it all.
+    </div>
+    <div class="statusline" id="submitStatus"></div>
+  </div>
+</div>
+
+<script src="common.js"></script>
+<script>
+(function () {
+  'use strict';
+  var TILES = 25, MINES = 5;
+  var gridEl = document.getElementById('grid');
+  var bankEl = document.getElementById('bankVal');
+  var nextEl = document.getElementById('nextVal');
+  var msgEl = document.getElementById('msgLine');
+  var cashBtn = document.getElementById('cashBtn');
+  var statusEl = document.getElementById('submitStatus');
+  document.getElementById('bestVal').textContent = String(window.DoGames.localBest('mines'));
+
+  var S = { mines: {}, revealed: {}, safe: 0, over: false, startAt: 0, submitted: false };
+
+  function bank(n) { return (n * (n + 1)) / 2; }
+
+  function newBoard() {
+    S = { mines: {}, revealed: {}, safe: 0, over: false, startAt: Date.now(), submitted: false };
+    var spots = [];
+    while (spots.length < MINES) {
+      var i = Math.floor(Math.random() * TILES);
+      if (!S.mines[i]) { S.mines[i] = true; spots.push(i); }
+    }
+    gridEl.innerHTML = '';
+    for (var t = 0; t < TILES; t++) {
+      (function (idx) {
+        var b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'tile';
+        b.dataset.idx = String(idx);
+        b.innerHTML = '<span class="qm"></span>';
+        b.addEventListener('click', function () { reveal(idx, b); });
+        gridEl.appendChild(b);
+      })(t);
+    }
+    statusEl.textContent = '';
+    msgEl.textContent = '';
+    syncBank();
+  }
+
+  function syncBank() {
+    bankEl.textContent = String(bank(S.safe));
+    nextEl.textContent = S.over ? '' :
+      (S.safe >= 20 ? 'Board cleared!' : 'Safe tiles: ' + S.safe + ' / 20 · next tile +' + (S.safe + 1));
+    cashBtn.disabled = S.over || S.safe < 1;
+  }
+
+  function reveal(idx, el) {
+    if (S.over || S.revealed[idx]) return;
+    S.revealed[idx] = true;
+    if (S.mines[idx]) {
+      el.classList.add('mine');
+      el.innerHTML = '<span class="bomb"></span>';
+      // show the rest of the mines
+      var tiles = gridEl.children;
+      for (var i = 0; i < TILES; i++) {
+        if (S.mines[i] && i !== idx) {
+          tiles[i].classList.add('mine', 'dim');
+          tiles[i].innerHTML = '<span class="bomb"></span>';
+        }
+      }
+      finish(false);
+      return;
+    }
+    S.safe++;
+    el.classList.add('safe');
+    el.innerHTML = '<span class="dotc"></span>';
+    if (S.safe >= 20) { finish(true); return; } // only mines left: auto cash-out
+    syncBank();
+  }
+
+  function finish(cashed) {
+    S.over = true;
+    var durationMs = Date.now() - S.startAt;
+    var score = cashed ? bank(S.safe) : 0;
+    msgEl.textContent = cashed ? 'Cashed out ' + score + ' pts!' : 'Burnt! The bank is gone.';
+    msgEl.style.color = cashed ? 'var(--gold)' : '#ff8a7a';
+    var best = window.DoGames.saveLocalBest('mines', score);
+    document.getElementById('bestVal').textContent = String(best);
+    syncBank();
+    if (!S.submitted) {
+      S.submitted = true;
+      window.DoGames.submitRun('mines', { safeTiles: S.safe, cashedOut: cashed, durationMs: durationMs }, statusEl);
+    }
+  }
+
+  cashBtn.addEventListener('click', function () { if (!S.over && S.safe >= 1) finish(true); });
+  document.getElementById('newBtn').addEventListener('click', newBoard);
+  newBoard();
+
+  window.__doGame = { state: function () { return S; }, newBoard: function () { newBoard(); return S; }, bank: bank, reveal: reveal, cashOut: function () { finish(true); }, mines: function () { return S.mines; } };
+})();
+</script>
+</body>
+</html>

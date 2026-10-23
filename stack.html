@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>Cookie Stack — DO Games</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<div class="stage">
+  <div class="topbar">
+    <a class="back" href="index.html">‹ Lobby</a>
+    <span class="gtitle">Cookie Stack</span>
+    <div class="hud">
+      <div class="hud-box"><div class="lbl">Score</div><div class="val" id="scoreVal">0</div></div>
+      <div class="hud-box"><div class="lbl">Layers</div><div class="val" id="layerVal">0</div></div>
+    </div>
+  </div>
+  <div class="playfield">
+    <canvas class="game" id="game"></canvas>
+
+    <div class="overlay" id="menuScreen">
+      <div class="big">Cookie Stack</div>
+      <div class="howto">
+        A cookie layer slides back and forth — <b>tap to drop it</b>.<br>
+        Whatever hangs over the edge <b>falls off</b>: your layer gets thinner.<br>
+        A <b>perfect drop</b> (dead-on) pays <b>+1 bonus</b> and <b>restores width</b> by 8% of the original.<br>
+        Miss completely and the run ends. Each layer is <b>+1</b>.
+      </div>
+      <div class="rowbtns"><button class="btn" id="playBtn" type="button">Play</button></div>
+      <div class="bestline" id="menuBest"></div>
+    </div>
+
+    <div class="overlay hidden" id="overScreen">
+      <div class="big">It toppled!</div>
+      <div class="final">Final score<b id="finalScore">0</b></div>
+      <div class="bestline" id="overBest"></div>
+      <div class="status" id="submitStatus"></div>
+      <div class="rowbtns">
+        <button class="btn" id="againBtn" type="button">Stack again</button>
+        <a class="btn ghost" href="index.html" style="text-decoration:none;display:inline-block">Lobby</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="common.js"></script>
+<script>
+(function () {
+  'use strict';
+  var LAYER_H = 26;
+  var canvas = document.getElementById('game');
+  var ctx = canvas.getContext('2d');
+  var scoreEl = document.getElementById('scoreVal');
+  var layerEl = document.getElementById('layerVal');
+  var menuEl = document.getElementById('menuScreen');
+  var overEl = document.getElementById('overScreen');
+  var statusEl = document.getElementById('submitStatus');
+  var W = 0, H = 0;
+
+  var G = {
+    state: 'menu', layers: [], falling: [], moving: null, dir: 1,
+    startW: 0, layersCount: 0, perfects: 0, score: 0, elapsed: 0, flash: 0,
+  };
+
+  function resize() {
+    var r = canvas.parentElement.getBoundingClientRect();
+    var DPR = Math.min(2, window.devicePixelRatio || 1);
+    W = Math.max(280, r.width); H = Math.max(320, r.height);
+    canvas.width = Math.round(W * DPR); canvas.height = Math.round(H * DPR);
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    G.startW = Math.min(230, W * 0.56);
+    if (G.state === 'menu') resetStack();
+  }
+  window.addEventListener('resize', resize);
+
+  function resetStack() {
+    var baseX = (W - G.startW) / 2;
+    G.layers = [{ x: baseX, w: G.startW }];
+    G.falling = [];
+    G.moving = null;
+    spawnMoving();
+  }
+
+  function speed() { return Math.min(430, 150 + G.layersCount * 11); }
+
+  function spawnMoving() {
+    var prev = G.layers[G.layers.length - 1];
+    var fromLeft = G.layersCount % 2 === 0;
+    G.moving = {
+      w: prev.w,
+      x: fromLeft ? -prev.w - 6 : W + 6,
+      vx: (fromLeft ? 1 : -1) * speed(),
+    };
+    G.dir = fromLeft ? 1 : -1;
+  }
+
+  function score() { return G.layersCount + G.perfects; }
+
+  function drop() {
+    if (G.state !== 'playing' || !G.moving) return;
+    var prev = G.layers[G.layers.length - 1];
+    var m = G.moving;
+    var left = Math.max(m.x, prev.x);
+    var right = Math.min(m.x + m.w, prev.x + prev.w);
+    var overlap = right - left;
+    if (overlap <= 0) {
+      G.falling.push({ x: m.x, w: m.w, y: layerScreenY(G.layers.length), vy: 0, rot: 0 });
+      G.moving = null;
+      endGame();
+      return;
+    }
+    var offset = m.x - prev.x;
+    var threshold = Math.max(4, prev.w * 0.05);
+    if (Math.abs(offset) <= threshold) {
+      // Perfect: snap aligned, +1 bonus, restore width by 8% of original.
+      var newW = Math.min(G.startW, prev.w + G.startW * 0.08);
+      var cx = prev.x + prev.w / 2;
+      G.layers.push({ x: cx - newW / 2, w: newW });
+      G.perfects++;
+      G.flash = 0.35;
+    } else {
+      if (offset < 0) G.falling.push({ x: m.x, w: prev.x - m.x, y: layerScreenY(G.layers.length), vy: 0, rot: -0.4 });
+      else G.falling.push({ x: prev.x + prev.w, w: (m.x + m.w) - (prev.x + prev.w), y: layerScreenY(G.layers.length), vy: 0, rot: 0.4 });
+      G.layers.push({ x: left, w: overlap });
+    }
+    G.layersCount++;
+    G.score = score();
+    spawnMoving();
+    syncHud();
+  }
+
+  // Screen Y of the TOP of layer index i (0 = base). Camera keeps the
+  // action near the lower third as the tower grows.
+  function baseY() { return H - 90; }
+  function layerScreenY(i) {
+    // Camera: once the tower passes 9 layers, everything shifts down a
+    // layer at a time so the top stays in view.
+    var shift = Math.max(0, G.layers.length - 9) * LAYER_H;
+    return baseY() - (i + 1) * LAYER_H + shift;
+  }
+
+  function syncHud() {
+    scoreEl.textContent = String(score());
+    layerEl.textContent = String(G.layersCount);
+  }
+
+  function startGame() {
+    G.state = 'playing';
+    G.layersCount = 0; G.perfects = 0; G.score = 0; G.elapsed = 0; G.flash = 0;
+    resetStack();
+    menuEl.classList.add('hidden'); overEl.classList.add('hidden');
+    syncHud();
+  }
+
+  function endGame() {
+    if (G.state !== 'playing') return;
+    G.state = 'over';
+    var durationMs = Math.round(G.elapsed * 1000);
+    document.getElementById('finalScore').textContent = String(score());
+    var best = window.DoGames.saveLocalBest('stack', score());
+    document.getElementById('overBest').textContent = 'Best: ' + best + ' · ' + G.layersCount + ' layers, ' + G.perfects + ' perfect';
+    overEl.classList.remove('hidden');
+    window.DoGames.submitRun('stack', {
+      layers: G.layersCount, perfects: G.perfects, durationMs: durationMs,
+    }, statusEl);
+  }
+
+  function drawLayer(x, y, w, shade) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(x, y, w, LAYER_H - 3);
+    ctx.fillStyle = shade || '#c98a4b';
+    ctx.fill();
+    ctx.lineWidth = 1.5; ctx.strokeStyle = '#8a4f24'; ctx.stroke();
+    ctx.fillStyle = 'rgba(74,42,18,.65)';
+    var n = Math.max(2, Math.floor(w / 34));
+    for (var i = 0; i < n; i++) {
+      var cx = x + (i + 0.5) * (w / n) + ((i % 2) ? 3 : -3);
+      ctx.beginPath(); ctx.arc(cx, y + (i % 2 ? 8 : 15), 2.6, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  function update(dt) {
+    for (var i = G.falling.length - 1; i >= 0; i--) {
+      var f = G.falling[i];
+      f.vy += 1400 * dt; f.y += f.vy * dt; f.rot += dt * 1.5;
+      if (f.y > H + 60) G.falling.splice(i, 1);
+    }
+    if (G.flash > 0) G.flash -= dt;
+    if (G.state !== 'playing') return;
+    G.elapsed += dt;
+    var m = G.moving;
+    if (m) {
+      m.x += m.vx * dt;
+      if (m.x < -m.w - 8) { m.x = -m.w - 8; m.vx = Math.abs(m.vx); }
+      if (m.x > W + 8) { m.x = W + 8; m.vx = -Math.abs(m.vx); }
+    }
+  }
+
+  function render() {
+    ctx.clearRect(0, 0, W, H);
+    // ground
+    ctx.fillStyle = 'rgba(196,176,250,.14)';
+    ctx.fillRect(0, baseY() + 2, W, 3);
+    var n = G.layers.length;
+    for (var i = 0; i < n; i++) {
+      drawLayer(G.layers[i].x, layerScreenY(i), G.layers[i].w, i === 0 ? '#a35c1d' : '#c98a4b');
+    }
+    if (G.moving && (G.state === 'playing' || G.state === 'menu')) {
+      var y = layerScreenY(n);
+      drawLayer(G.moving.x, y, G.moving.w, '#e0aa60');
+      if (G.flash > 0) {
+        ctx.save();
+        ctx.globalAlpha = G.flash / 0.35 * 0.5;
+        ctx.fillStyle = '#f5b921';
+        ctx.fillRect(G.moving.x - 3, y - 3, G.moving.w + 6, LAYER_H + 3);
+        ctx.restore();
+      }
+      if (G.state === 'playing') {
+        ctx.fillStyle = 'rgba(247,234,215,.8)';
+        ctx.font = '600 13px -apple-system, sans-serif'; ctx.textAlign = 'center';
+        ctx.fillText('Tap to drop', W / 2, y - 14);
+      }
+    }
+    for (var f = 0; f < G.falling.length; f++) {
+      ctx.save();
+      ctx.globalAlpha = 0.85;
+      drawLayer(G.falling[f].x, G.falling[f].y, G.falling[f].w, '#b5713d');
+      ctx.restore();
+    }
+  }
+
+  var lastT = 0;
+  function frame(ts) {
+    var dt = Math.min(0.05, ((ts || 0) - lastT) / 1000 || 0.016);
+    lastT = ts || 0;
+    update(dt);
+    render();
+    window.requestAnimationFrame(frame);
+  }
+
+  canvas.addEventListener('pointerdown', function () { if (G.state === 'playing') drop(); }, { passive: true });
+  window.addEventListener('keydown', function (e) {
+    if (e.key === ' ' || e.key === 'Enter') {
+      if (G.state === 'playing') { e.preventDefault(); drop(); }
+      else if (G.state === 'menu') startGame();
+    }
+  });
+
+  document.getElementById('playBtn').addEventListener('click', startGame);
+  document.getElementById('againBtn').addEventListener('click', startGame);
+  document.getElementById('menuBest').textContent = window.DoGames.localBest('stack') > 0 ? 'Best: ' + window.DoGames.localBest('stack') : '';
+  resize();
+  syncHud();
+  window.requestAnimationFrame(frame);
+
+  window.__doGame = { game: G, start: startGame, drop: drop, step: update, score: score };
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>DO Wheel — DO Games</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="stylesheet" href="common.css">
+<style>
+  .wheelzone{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;padding:10px}
+  .wheelwrap{position:relative;width:min(320px,84vw);aspect-ratio:1}
+  .pointer{
+    position:absolute;left:50%;top:-8px;transform:translateX(-50%);z-index:3;
+    width:0;height:0;border-left:13px solid transparent;border-right:13px solid transparent;border-top:22px solid var(--gold);
+    filter:drop-shadow(0 2px 3px rgba(0,0,0,.5));
+  }
+  canvas#wheel{width:100%;height:100%;display:block}
+  #wheelResult{font-size:21px;font-weight:800;min-height:27px;color:var(--cream);text-align:center}
+  #wheelResult .bust{color:#ff8a7a}
+  .statusline{font-size:14.5px;min-height:19px;color:var(--gold);text-align:center;max-width:350px}
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="topbar">
+    <a class="back" href="index.html">‹ Lobby</a>
+    <span class="gtitle">DO Wheel</span>
+    <div class="hud">
+      <div class="hud-box"><div class="lbl">Best</div><div class="val" id="bestVal">0</div></div>
+    </div>
+  </div>
+  <div class="wheelzone">
+    <div class="wheelwrap">
+      <div class="pointer"></div>
+      <canvas id="wheel" width="640" height="640"></canvas>
+    </div>
+    <div id="wheelResult">One spin. One segment.</div>
+    <button class="btn purple" id="spinBtn" type="button">SPIN</button>
+    <div class="statusline" id="submitStatus"></div>
+    <a class="btn ghost" href="index.html" style="text-decoration:none">Back to lobby</a>
+  </div>
+</div>
+
+<script src="common.js"></script>
+<script>
+(function () {
+  'use strict';
+  // Segments clockwise from the top — exactly the server contract set.
+  var SEGMENTS = ['BUST', 5, 10, 'BUST', 15, 5, 20, 10];
+  var COLORS = ['#46342a', '#58c472', '#8b5cf6', '#46342a', '#c98a4b', '#58c472', '#f5b921', '#8b5cf6'];
+  var canvas = document.getElementById('wheel');
+  var ctx = canvas.getContext('2d');
+  var resultEl = document.getElementById('wheelResult');
+  var statusEl = document.getElementById('submitStatus');
+  var spinBtn = document.getElementById('spinBtn');
+  document.getElementById('bestVal').textContent = String(window.DoGames.localBest('wheel'));
+
+  var S = { spinning: false, rot: 0, startRot: 0, targetRot: 0, startAt: 0, duration: 3400, targetIdx: 0 };
+
+  function drawWheel(rot) {
+    var S2 = 640, c = S2 / 2, R = c - 14;
+    ctx.clearRect(0, 0, S2, S2);
+    ctx.save();
+    ctx.translate(c, c);
+    ctx.rotate(rot);
+    for (var i = 0; i < 8; i++) {
+      var a0 = (i * 45 - 90) * Math.PI / 180, a1 = ((i + 1) * 45 - 90) * Math.PI / 180;
+      ctx.beginPath(); ctx.moveTo(0, 0); ctx.arc(0, 0, R, a0, a1); ctx.closePath();
+      ctx.fillStyle = COLORS[i]; ctx.fill();
+      ctx.lineWidth = 3; ctx.strokeStyle = '#f7ead7'; ctx.stroke();
+      ctx.save();
+      ctx.rotate(((i * 45 + 22.5) - 90) * Math.PI / 180);
+      ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+      ctx.fillStyle = SEGMENTS[i] === 'BUST' ? '#ffb3a7' : '#fff';
+      ctx.font = '800 44px -apple-system, "Segoe UI", Roboto, sans-serif';
+      ctx.fillText(String(SEGMENTS[i]), R - 26, 0);
+      ctx.restore();
+    }
+    ctx.beginPath(); ctx.arc(0, 0, 52, 0, Math.PI * 2);
+    ctx.fillStyle = '#f7ead7'; ctx.fill();
+    ctx.lineWidth = 4; ctx.strokeStyle = '#8a4f24'; ctx.stroke();
+    ctx.beginPath(); ctx.arc(0, 0, 30, 0, Math.PI * 2);
+    ctx.fillStyle = '#c98a4b'; ctx.fill();
+    ctx.fillStyle = '#4a2a12';
+    [[-10, -8], [11, -4], [0, 10], [-6, 4]].forEach(function (p) {
+      ctx.beginPath(); ctx.arc(p[0], p[1], 4.5, 0, Math.PI * 2); ctx.fill();
+    });
+    ctx.restore();
+  }
+
+  function landedIndex(rotDeg) {
+    var m = ((rotDeg % 360) + 360) % 360;
+    return Math.floor((((360 - m) % 360)) / 45);
+  }
+
+  function easeOut(t) { return 1 - Math.pow(1 - t, 4); }
+
+  function spin() {
+    if (S.spinning) return;
+    S.spinning = true;
+    spinBtn.disabled = true;
+    statusEl.textContent = '';
+    resultEl.textContent = 'Spinning…';
+    S.targetIdx = Math.floor(Math.random() * 8);
+    // Land the target segment's centre under the top pointer, with a
+    // little in-segment jitter. Segment i centre sits at wheel-local
+    // angle i*45 + 22.5 (measuring clockwise from top after rotation).
+    var jitter = (Math.random() - 0.5) * 30;
+    var finalMod = ((360 - (S.targetIdx * 45 + 22.5) + jitter) % 360 + 360) % 360;
+    var curMod = ((S.rot % 360) + 360) % 360;
+    var delta = ((finalMod - curMod) + 360) % 360;
+    S.startRot = S.rot;
+    S.targetRot = S.rot + 360 * 5 + delta;
+    S.duration = 3200 + Math.random() * 500;
+    S.startAt = performance.now();
+    window.requestAnimationFrame(tick);
+  }
+
+  function tick(now) {
+    var t = Math.min(1, (now - S.startAt) / S.duration);
+    S.rot = S.startRot + (S.targetRot - S.startRot) * easeOut(t);
+    drawWheel(S.rot * Math.PI / 180);
+    if (t < 1) { window.requestAnimationFrame(tick); return; }
+    S.rot = S.targetRot;
+    drawWheel(S.rot * Math.PI / 180);
+    finish(Math.round(performance.now() - S.startAt));
+  }
+
+  function finish(spinMs) {
+    S.spinning = false;
+    spinBtn.disabled = false;
+    var idx = landedIndex(S.rot);
+    var seg = SEGMENTS[idx];
+    var value = seg === 'BUST' ? 0 : seg;
+    if (value === 0) resultEl.innerHTML = '<span class="bust">BUST — no points.</span>';
+    else resultEl.textContent = '+' + value + ' points!';
+    var best = window.DoGames.saveLocalBest('wheel', value);
+    document.getElementById('bestVal').textContent = String(best);
+    window.DoGames.submitRun('wheel', { value: value, spinMs: spinMs }, statusEl);
+    S.lastResult = { idx: idx, value: value, spinMs: spinMs };
+  }
+
+  spinBtn.addEventListener('click', spin);
+  drawWheel(0);
+
+  window.__doGame = { segments: SEGMENTS, state: S, spin: spin, landedIndex: landedIndex, draw: drawWheel };
+})();
+</script>
+</body>
+</html>

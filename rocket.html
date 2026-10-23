@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>DO Rocket — DO Games</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="stylesheet" href="common.css">
+<style>
+  .multzone{position:absolute;top:12px;left:0;right:0;text-align:center;z-index:4;pointer-events:none}
+  .multzone .mult{font-size:52px;font-weight:800;color:var(--cream);text-shadow:0 3px 0 #4c1d95,0 8px 24px rgba(0,0,0,.6);font-variant-numeric:tabular-nums}
+  .multzone .bank{font-size:16px;font-weight:700;color:var(--gold)}
+  .cashrow{position:absolute;left:0;right:0;bottom:calc(18px + env(safe-area-inset-bottom));display:flex;justify-content:center;z-index:5}
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="topbar">
+    <a class="back" href="index.html">‹ Lobby</a>
+    <span class="gtitle">DO Rocket</span>
+    <div class="hud">
+      <div class="hud-box"><div class="lbl">Best</div><div class="val" id="bestVal">0</div></div>
+    </div>
+  </div>
+  <div class="playfield">
+    <canvas class="game" id="game"></canvas>
+    <div class="multzone hidden" id="multZone">
+      <div class="mult" id="multVal">1.00x</div>
+      <div class="bank" id="bankVal">Cash out for 10 pts</div>
+    </div>
+    <div class="cashrow hidden" id="cashRow">
+      <button class="btn" id="cashBtn" type="button">CASH OUT</button>
+    </div>
+
+    <div class="overlay" id="menuScreen">
+      <div class="big">DO Rocket</div>
+      <div class="howto">
+        The cookie rocket climbs and the multiplier grows: <b>1.00x, 2.00x, 3.00x…</b><br>
+        Cash out to bank <b>floor(10 × multiplier)</b> — up to <b>50 pts</b>.<br>
+        Wait too long and it <span class="bad">crashes for 0</span>. Nobody knows when.
+      </div>
+      <div class="rowbtns"><button class="btn" id="playBtn" type="button">Launch</button></div>
+      <div class="bestline" id="menuBest"></div>
+    </div>
+
+    <div class="overlay hidden" id="overScreen">
+      <div class="big" id="overTitle">Cashed out!</div>
+      <div class="final">You banked<b id="finalScore">0</b></div>
+      <div class="bestline" id="overBest"></div>
+      <div class="status" id="submitStatus"></div>
+      <div class="rowbtns">
+        <button class="btn" id="againBtn" type="button">Fly again</button>
+        <a class="btn ghost" href="index.html" style="text-decoration:none;display:inline-block">Lobby</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="common.js"></script>
+<script>
+(function () {
+  'use strict';
+  var RATE = 0.11; // mult = e^(RATE * t) — mirrors the server contract
+  var canvas = document.getElementById('game');
+  var ctx = canvas.getContext('2d');
+  var menuEl = document.getElementById('menuScreen');
+  var overEl = document.getElementById('overScreen');
+  var multZone = document.getElementById('multZone');
+  var multEl = document.getElementById('multVal');
+  var bankEl = document.getElementById('bankVal');
+  var cashRow = document.getElementById('cashRow');
+  var statusEl = document.getElementById('submitStatus');
+  var W = 0, H = 0;
+
+  var G = { state: 'menu', time: 0, mult: 1, crashAt: 0, stars: [], parts: [], submitted: false, crashed: false };
+
+  function resize() {
+    var r = canvas.parentElement.getBoundingClientRect();
+    var DPR = Math.min(2, window.devicePixelRatio || 1);
+    W = Math.max(280, r.width); H = Math.max(320, r.height);
+    canvas.width = Math.round(W * DPR); canvas.height = Math.round(H * DPR);
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    G.stars = [];
+    for (var i = 0; i < 60; i++) G.stars.push({ x: Math.random() * W, y: Math.random() * H, r: Math.random() * 1.8 + 0.4, s: 12 + Math.random() * 30 });
+  }
+  window.addEventListener('resize', resize);
+
+  function pickCrash() {
+    // Skewed low, capped at the 8x the server accepts.
+    return Math.min(8, 1 + Math.pow(Math.random(), 2.5) * 7);
+  }
+
+  function startGame() {
+    G.state = 'flying'; G.time = 0; G.mult = 1; G.crashAt = pickCrash(); G.parts = []; G.submitted = false; G.crashed = false;
+    menuEl.classList.add('hidden'); overEl.classList.add('hidden');
+    multZone.classList.remove('hidden'); cashRow.classList.remove('hidden');
+    syncMult();
+  }
+
+  function syncMult() {
+    multEl.textContent = G.mult.toFixed(2) + 'x';
+    bankEl.textContent = 'Cash out for ' + Math.min(50, Math.floor(10 * G.mult)) + ' pts';
+  }
+
+  function finish(cashed) {
+    if (G.submitted) return;
+    G.submitted = true;
+    G.state = 'over';
+    multZone.classList.add('hidden'); cashRow.classList.add('hidden');
+    var durationMs = Math.round(G.time * 1000);
+    G.crashed = !cashed;
+    var cashedMult = cashed ? Math.round(G.mult * 100) / 100 : 0;
+    var score = cashed ? Math.min(50, Math.floor(10 * cashedMult)) : 0;
+    document.getElementById('overTitle').textContent = cashed ? 'Cashed out!' : 'Crashed!';
+    document.getElementById('finalScore').textContent = String(score);
+    var best = window.DoGames.saveLocalBest('rocket', score);
+    document.getElementById('bestVal').textContent = String(best);
+    document.getElementById('overBest').textContent = 'Best: ' + best;
+    overEl.classList.remove('hidden');
+    if (!cashed) explode();
+    window.DoGames.submitRun('rocket', { cashedMult: cashedMult, durationMs: durationMs }, statusEl);
+  }
+
+  function explode() {
+    for (var i = 0; i < 26; i++) {
+      var a = Math.random() * Math.PI * 2, sp = 40 + Math.random() * 150;
+      G.parts.push({ x: W / 2, y: rocketY(), vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, t: 0, life: 0.8, color: ['#f5b921', '#e2483a', '#c98a4b'][i % 3] });
+    }
+  }
+
+  function rocketY() {
+    var p = Math.min(1, G.time / 16);
+    return H - 110 - p * (H - 240);
+  }
+
+  function update(dt) {
+    for (var i = 0; i < G.stars.length; i++) {
+      var s = G.stars[i];
+      s.y += s.s * dt * (G.state === 'flying' ? (1 + G.mult) : 1);
+      if (s.y > H) { s.y = -2; s.x = Math.random() * W; }
+    }
+    for (var p = G.parts.length - 1; p >= 0; p--) {
+      var pt = G.parts[p]; pt.t += dt; pt.x += pt.vx * dt; pt.y += pt.vy * dt;
+      if (pt.t > pt.life) G.parts.splice(p, 1);
+    }
+    if (G.state !== 'flying') return;
+    G.time += dt;
+    G.mult = Math.exp(RATE * G.time);
+    if (G.mult >= G.crashAt) { G.mult = G.crashAt; finish(false); return; }
+    syncMult();
+  }
+
+  function drawRocket(x, y, crashed) {
+    ctx.save(); ctx.translate(x, y);
+    if (crashed) ctx.globalAlpha = 0.25;
+    // flame
+    ctx.beginPath(); ctx.moveTo(-9, 26); ctx.quadraticCurveTo(0, 44 + Math.random() * 12, 9, 26); ctx.closePath();
+    ctx.fillStyle = '#f5b921'; ctx.fill();
+    ctx.beginPath(); ctx.moveTo(-5, 26); ctx.quadraticCurveTo(0, 36 + Math.random() * 8, 5, 26); ctx.closePath();
+    ctx.fillStyle = '#e2483a'; ctx.fill();
+    // body: a cookie rocket (round, with fins)
+    ctx.beginPath(); ctx.arc(0, 0, 24, 0, Math.PI * 2);
+    ctx.fillStyle = '#c98a4b'; ctx.fill(); ctx.lineWidth = 3; ctx.strokeStyle = '#8a4f24'; ctx.stroke();
+    // nose cone
+    ctx.beginPath(); ctx.moveTo(-24, -6); ctx.quadraticCurveTo(0, -52, 24, -6); ctx.closePath();
+    ctx.fillStyle = '#8b5cf6'; ctx.fill(); ctx.strokeStyle = '#4c1d95'; ctx.lineWidth = 2; ctx.stroke();
+    // window
+    ctx.beginPath(); ctx.arc(0, -2, 9, 0, Math.PI * 2);
+    ctx.fillStyle = '#bfe3ff'; ctx.fill(); ctx.strokeStyle = '#4c1d95'; ctx.stroke();
+    // chips
+    ctx.fillStyle = '#4a2a12';
+    [[-13, 12], [13, 12], [0, 16]].forEach(function (p) { ctx.beginPath(); ctx.arc(p[0], p[1], 3.4, 0, Math.PI * 2); ctx.fill(); });
+    // fins
+    ctx.beginPath(); ctx.moveTo(-22, 14); ctx.lineTo(-36, 32); ctx.lineTo(-18, 28); ctx.closePath(); ctx.fillStyle = '#8b5cf6'; ctx.fill();
+    ctx.beginPath(); ctx.moveTo(22, 14); ctx.lineTo(36, 32); ctx.lineTo(18, 28); ctx.closePath(); ctx.fill();
+    ctx.restore();
+  }
+
+  function render() {
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = '#f7ead7';
+    for (var i = 0; i < G.stars.length; i++) {
+      var s = G.stars[i];
+      ctx.globalAlpha = 0.35 + (s.r / 2.2) * 0.5;
+      ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    if (G.state !== 'menu') drawRocket(W / 2, rocketY(), G.crashed);
+    for (var p = 0; p < G.parts.length; p++) {
+      var pt = G.parts[p];
+      ctx.globalAlpha = Math.max(0, 1 - pt.t / pt.life);
+      ctx.fillStyle = pt.color;
+      ctx.beginPath(); ctx.arc(pt.x, pt.y, 4, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  var lastT = 0;
+  function frame(ts) {
+    var dt = Math.min(0.05, ((ts || 0) - lastT) / 1000 || 0.016);
+    lastT = ts || 0;
+    update(dt);
+    render();
+    window.requestAnimationFrame(frame);
+  }
+
+  document.getElementById('playBtn').addEventListener('click', startGame);
+  document.getElementById('againBtn').addEventListener('click', startGame);
+  document.getElementById('cashBtn').addEventListener('click', function () { if (G.state === 'flying') finish(true); });
+
+  document.getElementById('menuBest').textContent = window.DoGames.localBest('rocket') > 0 ? 'Best: ' + window.DoGames.localBest('rocket') : '';
+  document.getElementById('bestVal').textContent = String(window.DoGames.localBest('rocket'));
+  resize();
+  window.requestAnimationFrame(frame);
+
+  window.__doGame = { game: G, start: startGame, cashOut: function () { finish(true); }, crash: function () { finish(false); }, pickCrash: pickCrash };
+})();
+</script>
+</body>
+</html>

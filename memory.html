@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>Cookie Memory — DO Games</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="stylesheet" href="common.css">
+<style>
+  .memzone{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:15px;padding:12px}
+  .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;width:min(340px,90vw)}
+  .card{
+    aspect-ratio:1;border-radius:13px;cursor:pointer;position:relative;border:1px solid rgba(196,176,250,.45);
+    background:linear-gradient(160deg,#4c1d95,#2a1a4d);font-family:inherit;padding:0;
+    display:flex;align-items:center;justify-content:center;
+  }
+  .card .backmark{width:40%;height:40%;border-radius:50%;background:radial-gradient(circle at 35% 30%,var(--dough),var(--cookie) 70%,var(--cookie-dk));opacity:.5}
+  .card.up,.card.done{cursor:default;background:linear-gradient(160deg,#5b3a1e,#3d2412);border-color:rgba(233,184,114,.55)}
+  .card.done{outline:2px solid var(--gold)}
+  .face{width:74%;height:74%;border-radius:50%;position:relative;display:none;
+    box-shadow:inset 0 -3px 6px rgba(90,45,10,.5)}
+  .card.up .face,.card.done .face{display:block}
+  .card.up .backmark,.card.done .backmark{display:none}
+  .face i{position:absolute;border-radius:50%;background:#4a2a12}
+  /* 8 cookie faces: tint + chip pattern per type */
+  .f0{background:radial-gradient(circle at 35% 30%,#e9b872,#c98a4b 70%,#8a4f24)}
+  .f1{background:radial-gradient(circle at 35% 30%,#f5d76a,#e3a81c 70%,#9c6608)}
+  .f2{background:radial-gradient(circle at 35% 30%,#b07a45,#7a4a21 70%,#4a2a12)}
+  .f3{background:radial-gradient(circle at 35% 30%,#f7ead7,#dfc49a 70%,#a8854f)}
+  .f4{background:radial-gradient(circle at 35% 30%,#d98c5f,#a34d21 70%,#662d10)}
+  .f5{background:radial-gradient(circle at 35% 30%,#9a6a3a,#5f3c1a 70%,#33200c)}
+  .f6{background:radial-gradient(circle at 35% 30%,#ffc98a,#e08e3a 70%,#8f5416)}
+  .f7{background:radial-gradient(circle at 35% 30%,#cbb3f5,#8b5cf6 70%,#4c1d95)}
+  .f7 i{background:#2a1a4d}
+  .statsline{display:flex;gap:16px;font-size:14.5px;font-weight:700}
+  .statsline span b{color:var(--gold);font-variant-numeric:tabular-nums}
+  .msgline{font-size:16px;font-weight:700;min-height:21px;text-align:center;color:var(--gold)}
+  .statusline{font-size:14.5px;min-height:19px;color:var(--gold);text-align:center;max-width:350px}
+  .howline{font-size:13px;opacity:.75;text-align:center;max-width:340px;line-height:1.55}
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="topbar">
+    <a class="back" href="index.html">‹ Lobby</a>
+    <span class="gtitle">Cookie Memory</span>
+    <div class="hud">
+      <div class="hud-box"><div class="lbl">Best</div><div class="val" id="bestVal">0</div></div>
+    </div>
+  </div>
+  <div class="memzone">
+    <div class="statsline">
+      <span>Flips <b id="flipVal">0</b></span>
+      <span>Pairs <b id="pairVal">0 / 8</b></span>
+      <span>Time <b id="timeVal">0.0</b></span>
+    </div>
+    <div class="grid" id="grid"></div>
+    <div class="msgline" id="msgLine"></div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:center">
+      <button class="btn purple" id="newBtn" type="button">Shuffle new game</button>
+      <a class="btn ghost" href="index.html" style="text-decoration:none">Lobby</a>
+    </div>
+    <div class="howline">
+      Match all 8 cookie pairs. Finishing pays <b>100</b>, plus up to <b>+64</b> for a
+      sharp memory (16 flips is perfect) and up to <b>+30</b> for speed.
+    </div>
+    <div class="statusline" id="submitStatus"></div>
+  </div>
+</div>
+
+<script src="common.js"></script>
+<script>
+(function () {
+  'use strict';
+  // Chip patterns per face type: [left%, top%, size%] dots.
+  var CHIPS = [
+    [[30, 28, 13], [58, 52, 13], [38, 62, 11]],
+    [[50, 24, 12], [28, 55, 12], [62, 60, 12]],
+    [[24, 30, 14], [52, 30, 14], [38, 58, 14]],
+    [[50, 46, 18]],
+    [[30, 26, 11], [60, 28, 11], [30, 58, 11], [60, 58, 11]],
+    [[46, 26, 12], [26, 48, 12], [64, 48, 12], [46, 64, 12]],
+    [[24, 40, 12], [48, 40, 12], [72, 40, 12]],
+    [[36, 34, 13], [58, 58, 13]],
+  ];
+  var gridEl = document.getElementById('grid');
+  var flipEl = document.getElementById('flipVal');
+  var pairEl = document.getElementById('pairVal');
+  var timeEl = document.getElementById('timeVal');
+  var msgEl = document.getElementById('msgLine');
+  var statusEl = document.getElementById('submitStatus');
+  document.getElementById('bestVal').textContent = String(window.DoGames.localBest('memory'));
+
+  var S = null;
+  var timerInt = null;
+
+  function scoreFor(flips, durationMs) {
+    return 100 + Math.max(0, 64 - 2 * (flips - 16)) + Math.max(0, 30 - Math.floor(durationMs / 2000));
+  }
+
+  function newGame() {
+    var deck = [];
+    for (var t = 0; t < 8; t++) { deck.push(t, t); }
+    for (var i = deck.length - 1; i > 0; i--) {
+      var j = Math.floor(Math.random() * (i + 1));
+      var tmp = deck[i]; deck[i] = deck[j]; deck[j] = tmp;
+    }
+    S = { deck: deck, up: [], matched: {}, pairs: 0, flips: 0, startAt: null, lock: false, done: false, submitted: false };
+    gridEl.innerHTML = '';
+    deck.forEach(function (type, idx) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'card';
+      b.dataset.idx = String(idx);
+      var face = document.createElement('span');
+      face.className = 'face f' + type;
+      CHIPS[type].forEach(function (c) {
+        var dot = document.createElement('i');
+        dot.style.left = c[0] + '%'; dot.style.top = c[1] + '%';
+        dot.style.width = c[2] + '%'; dot.style.height = c[2] + '%';
+        face.appendChild(dot);
+      });
+      var back = document.createElement('span');
+      back.className = 'backmark';
+      b.appendChild(face);
+      b.appendChild(back);
+      b.addEventListener('click', function () { flip(idx, b); });
+      gridEl.appendChild(b);
+    });
+    msgEl.textContent = '';
+    statusEl.textContent = '';
+    syncStats();
+    if (timerInt) { clearInterval(timerInt); timerInt = null; }
+    timeEl.textContent = '0.0';
+  }
+
+  function syncStats() {
+    flipEl.textContent = String(S.flips);
+    pairEl.textContent = S.pairs + ' / 8';
+  }
+
+  function flip(idx, el) {
+    if (!S || S.done || S.lock || S.matched[idx] || S.up.indexOf(idx) >= 0) return;
+    if (!S.startAt) {
+      S.startAt = Date.now();
+      timerInt = setInterval(function () {
+        if (S && S.startAt && !S.done) timeEl.textContent = ((Date.now() - S.startAt) / 1000).toFixed(1);
+      }, 100);
+    }
+    S.flips++;
+    el.classList.add('up');
+    S.up.push(idx);
+    syncStats();
+    if (S.up.length < 2) return;
+    var a = S.up[0], b = S.up[1];
+    if (S.deck[a] === S.deck[b]) {
+      S.matched[a] = true; S.matched[b] = true;
+      gridEl.children[a].classList.add('done');
+      gridEl.children[b].classList.add('done');
+      S.up = [];
+      S.pairs++;
+      syncStats();
+      if (S.pairs >= 8) finish();
+    } else {
+      S.lock = true;
+      setTimeout(function () {
+        gridEl.children[a].classList.remove('up');
+        gridEl.children[b].classList.remove('up');
+        S.up = [];
+        S.lock = false;
+      }, 680);
+    }
+  }
+
+  function finish() {
+    S.done = true;
+    if (timerInt) { clearInterval(timerInt); timerInt = null; }
+    var durationMs = Date.now() - S.startAt;
+    timeEl.textContent = (durationMs / 1000).toFixed(1);
+    var score = scoreFor(S.flips, durationMs);
+    msgEl.textContent = 'All pairs! ' + score + ' pts (' + S.flips + ' flips)';
+    var best = window.DoGames.saveLocalBest('memory', score);
+    document.getElementById('bestVal').textContent = String(best);
+    if (!S.submitted) {
+      S.submitted = true;
+      window.DoGames.submitRun('memory', { flips: S.flips, durationMs: durationMs, completed: true }, statusEl);
+    }
+  }
+
+  document.getElementById('newBtn').addEventListener('click', newGame);
+  newGame();
+
+  window.__doGame = { state: function () { return S; }, newGame: newGame, flip: flip, scoreFor: scoreFor };
+})();
+</script>
+</body>
+</html>

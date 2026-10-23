@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>DO Games — a DO Chain arcade</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="stylesheet" href="common.css">
+<style>
+  .wrap{max-width:520px;margin:0 auto;padding:18px 14px 34px}
+  header{text-align:center;padding:8px 0 2px}
+  header .cookie-mark{width:64px;height:64px}
+  h1{font-size:34px;font-weight:800;color:var(--cream);margin-top:10px;text-shadow:0 3px 0 #4c1d95}
+  .sub{opacity:.85;font-size:14.5px;margin-top:4px;line-height:1.5}
+  #idChip{
+    display:inline-block;margin-top:12px;font-size:13px;padding:6px 14px;border-radius:999px;
+    background:rgba(247,234,215,.08);border:1px solid rgba(247,234,215,.25);color:var(--cream);
+  }
+  #idChip button{background:none;border:none;color:var(--gold);font-weight:700;cursor:pointer;font-size:13px;font-family:inherit;text-decoration:underline}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:11px;margin-top:20px}
+  .card{
+    display:block;text-decoration:none;color:var(--ink);border-radius:16px;padding:15px 13px 13px;
+    background:linear-gradient(180deg,var(--panel2),var(--panel));
+    border:1px solid rgba(196,176,250,.28);box-shadow:0 6px 16px rgba(0,0,0,.35);
+  }
+  .card:active{transform:translateY(2px)}
+  .card .icon{height:46px;display:flex;align-items:center;justify-content:center;margin-bottom:8px}
+  .card h2{font-size:16.5px;font-weight:800;color:var(--cream)}
+  .card p{font-size:12.3px;opacity:.78;line-height:1.45;margin-top:3px;min-height:36px}
+  .card .pts{margin-top:7px;font-size:11.5px;font-weight:700;color:var(--gold);letter-spacing:.02em}
+  .card .mybest{font-size:11.5px;opacity:.65;margin-top:2px}
+  /* per-game CSS icons */
+  .ic-cookie{width:44px;height:44px}
+  .ic-wheel{width:44px;height:44px;border-radius:50%;background:conic-gradient(#e2483a 0 45deg,#f5b921 45deg 90deg,#58c472 90deg 135deg,#8b5cf6 135deg 180deg,#e2483a 180deg 225deg,#f5b921 225deg 270deg,#58c472 270deg 315deg,#8b5cf6 315deg 360deg);border:3px solid #f7ead7;position:relative}
+  .ic-wheel::after{content:"";position:absolute;inset:15px;border-radius:50%;background:#f7ead7}
+  .ic-rocket{width:0;height:0;border-left:13px solid transparent;border-right:13px solid transparent;border-bottom:38px solid #c4b0fa;position:relative}
+  .ic-rocket::after{content:"";position:absolute;left:-7px;top:38px;width:14px;height:12px;border-radius:0 0 50% 50%;background:linear-gradient(180deg,#f5b921,#e2483a)}
+  .ic-slice{width:44px;height:44px;border-radius:50%;background:radial-gradient(circle at 35% 30%,var(--dough),var(--cookie) 68%,var(--cookie-dk));position:relative;overflow:hidden}
+  .ic-slice::after{content:"";position:absolute;left:-4px;top:20px;width:56px;height:4px;background:#f7ead7;transform:rotate(-24deg);border-radius:2px}
+  .ic-blocks{display:grid;grid-template-columns:repeat(4,10px);gap:3px}
+  .ic-blocks i{width:10px;height:10px;border-radius:3px;background:var(--cookie)}
+  .ic-blocks i:nth-child(4n+1){background:#7a3b14}.ic-blocks i:nth-child(4n+2){background:#a35c1d}
+  .ic-blocks i:nth-child(4n+3){background:#c98a4b}.ic-blocks i:nth-child(4n){background:#e9b872}
+  .ic-stack{display:flex;flex-direction:column;gap:3px;align-items:center}
+  .ic-stack i{display:block;height:8px;border-radius:4px;background:var(--cookie);box-shadow:inset 0 -2px 3px rgba(90,45,10,.5)}
+  .ic-stack i:nth-child(1){width:26px}.ic-stack i:nth-child(2){width:34px}.ic-stack i:nth-child(3){width:42px}
+  .ic-mines{display:grid;grid-template-columns:repeat(3,12px);gap:3px}
+  .ic-mines i{width:12px;height:12px;border-radius:3px;background:#3b2568;border:1px solid rgba(196,176,250,.5)}
+  .ic-mines i.hot{background:#46342a;border-color:#e2483a}
+  .ic-cards{display:flex;gap:4px}
+  .ic-cards i{width:20px;height:28px;border-radius:4px;background:linear-gradient(160deg,#4c1d95,#2a1a4d);border:1px solid rgba(196,176,250,.55)}
+  .ic-cards i.up{background:radial-gradient(circle at 50% 42%,var(--dough),var(--cookie) 72%,var(--cookie-dk))}
+  .ic-snake{display:flex;gap:3px;align-items:center}
+  .ic-snake i{width:11px;height:11px;border-radius:3px;background:#58c472}
+  .ic-snake i.head{background:#3f9e57}
+  .ic-snake i.food{border-radius:50%;background:radial-gradient(circle at 35% 30%,var(--dough),var(--cookie) 70%,var(--cookie-dk))}
+  .ic-cross{display:flex;flex-direction:column;gap:4px;width:44px}
+  .ic-cross i{display:block;height:7px;border-radius:4px;background:rgba(196,176,250,.45)}
+  .ic-cross i.pin{background:linear-gradient(90deg,#8a4f24,#e9b872,#8a4f24)}
+  h2.board-title{text-align:center;font-size:23px;margin-top:30px;color:var(--cream)}
+  .board-sub{text-align:center;font-size:13px;opacity:.75;margin-top:4px;line-height:1.5}
+  footer{text-align:center;font-size:12px;opacity:.6;margin-top:26px;line-height:1.6}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <span class="cookie-mark"></span>
+    <h1>DO Games</h1>
+    <div class="sub">Ten little cookie games from the DO Chain kitchen.<br>Free to play — bragging rights only.</div>
+    <div><span id="idChip">Loading…</span></div>
+  </header>
+
+  <div class="grid" id="gameGrid"></div>
+
+  <h2 class="board-title">Leaderboard</h2>
+  <div class="board-sub">Your <b>DO Points</b> = your best run in each game, all added up.<br>Weekly board resets Monday 00:00 UTC.</div>
+  <div class="lbtabs">
+    <button class="lbtab on" id="tabWeek" type="button">This Week</button>
+    <button class="lbtab" id="tabAll" type="button">All Time</button>
+  </div>
+  <div class="lbmeta" id="lbMeta"></div>
+  <div class="lblist" id="lbList"><div class="lbmsg">Loading…</div></div>
+
+  <footer>DO Games · from @Dochainassistancebot · just for fun — no prizes, no tokens, just cookies.</footer>
+</div>
+
+<script src="common.js"></script>
+<script>
+(function () {
+  'use strict';
+  var GAMES = [
+    { key: 'catch',    name: 'Cookie Catch',   page: 'catch.html',    icon: '<span class="cookie-mark ic-cookie"></span>', blurb: 'Drag the jar, catch falling cookies. Burnt ones cost points and a life.', pts: 'Cookie +10 · Golden +30 · Burnt −15' },
+    { key: 'wheel',    name: 'DO Wheel',       page: 'wheel.html',    icon: '<span class="ic-wheel"></span>', blurb: 'One spin, one prize segment. Land the 20 if you can.', pts: 'Segments up to 20 pts' },
+    { key: 'rocket',   name: 'DO Rocket',      page: 'rocket.html',   icon: '<span class="ic-rocket"></span>', blurb: 'Ride the multiplier, cash out before the crash.', pts: 'floor(10 × multiplier), max 50' },
+    { key: 'slice',    name: 'Cookie Slice',   page: 'slice.html',    icon: '<span class="ic-slice"></span>', blurb: 'Swipe through flying cookies. Never slice a burnt bomb.', pts: 'Cookie +10 · Golden +30 · Bomb −25' },
+    { key: 'breakout', name: 'DO Breakout',    page: 'breakout.html', icon: '<span class="ic-blocks"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>', blurb: 'Smash the cookie-block wall with 3 balls. Top rows pay more.', pts: 'Blocks 5–15 · Clear bonus +50' },
+    { key: 'stack',    name: 'Cookie Stack',   page: 'stack.html',    icon: '<span class="ic-stack"><i></i><i></i><i></i></span>', blurb: 'Drop sliding cookie layers, stack a tower. Perfect drops pay bonus.', pts: 'Layer +1 · Perfect +1 bonus' },
+    { key: 'mines',    name: 'DO Mines',       page: 'mines.html',    icon: '<span class="ic-mines"><i></i><i></i><i></i><i></i><i class="hot"></i><i></i><i></i><i></i><i></i></span>', blurb: 'Reveal cookies, dodge 5 burnt mines, cash out before you bust.', pts: 'Bank grows per safe tile, max 210' },
+    { key: 'memory',   name: 'Cookie Memory',  page: 'memory.html',   icon: '<span class="ic-cards"><i></i><i class="up"></i><i></i></span>', blurb: 'Match 8 cookie pairs. Fewer flips and faster time pay more.', pts: 'Finish bonus up to 194' },
+    { key: 'snake',    name: 'DO Snake',       page: 'snake.html',    icon: '<span class="ic-snake"><i class="head"></i><i></i><i></i><i class="food"></i></span>', blurb: 'The classic. Eat cookies, grow long, do not bite yourself.', pts: 'Cookie +25 · Every 5th golden +60' },
+    { key: 'crossing', name: 'Cookie Crossing', page: 'crossing.html', icon: '<span class="ic-cross"><i class="pin"></i><i></i><i class="pin"></i><i></i></span>', blurb: 'Cross the busy bakery floor between rolling pins. Again. Faster.', pts: '+50 per crossing' },
+  ];
+  var SHORT = { catch: 'Catch', wheel: 'Wheel', rocket: 'Rocket', slice: 'Slice', breakout: 'Breakout', stack: 'Stack', mines: 'Mines', memory: 'Memory', snake: 'Snake', crossing: 'Crossing' };
+
+  /* ---- game cards ---- */
+  var grid = document.getElementById('gameGrid');
+  GAMES.forEach(function (g) {
+    var a = document.createElement('a');
+    a.className = 'card';
+    a.href = g.page;
+    var best = window.DoGames.localBest(g.key);
+    a.innerHTML = '<div class="icon">' + g.icon + '</div><h2>' + g.name + '</h2><p>' + g.blurb + '</p>' +
+      '<div class="pts">' + g.pts + '</div>' +
+      '<div class="mybest">' + (best > 0 ? 'Your best here: ' + best : 'Not played yet') + '</div>';
+    grid.appendChild(a);
+  });
+
+  /* ---- identity chip ---- */
+  var chip = document.getElementById('idChip');
+  function renderChip() {
+    var id = window.DoGames.displayIdentity();
+    chip.textContent = 'Playing as ' + id.label;
+    if (id.guest) {
+      chip.appendChild(document.createTextNode(' '));
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = 'Set name';
+      b.addEventListener('click', function () {
+        // Clear any saved name so the prompt appears, then re-render.
+        try { window.localStorage.removeItem('doGamesName'); } catch (e) { }
+        window.DoGames.promptGuestName(function () { renderChip(); });
+      });
+      chip.appendChild(b);
+    }
+  }
+  renderChip();
+
+  /* ---- leaderboard ---- */
+  var lbList = document.getElementById('lbList');
+  var lbMeta = document.getElementById('lbMeta');
+  var tabWeek = document.getElementById('tabWeek');
+  var tabAll = document.getElementById('tabAll');
+  var board = 'week';
+  var cache = null;
+
+  function renderBoard() {
+    tabWeek.classList.toggle('on', board === 'week');
+    tabAll.classList.toggle('on', board === 'all');
+    if (!cache) return;
+    var data = board === 'week' ? cache.weekly : cache.allTime;
+    lbMeta.textContent = board === 'week'
+      ? 'Week ' + (cache.week || '') + (cache.resetsAt ? ' · resets ' + String(cache.resetsAt).slice(0, 10) : '')
+      : 'Best DO Points of all time';
+    var entries = (data && data.entries) || [];
+    if (!entries.length) {
+      lbList.innerHTML = '<div class="lbmsg">No scores yet — be the first!</div>';
+      return;
+    }
+    var me = window.DoGames.myBoardId();
+    lbList.innerHTML = '';
+    entries.forEach(function (en, i) {
+      var row = document.createElement('div');
+      row.className = 'lbrow' + (me && en.id === me ? ' me' : '');
+      var rk = document.createElement('span'); rk.className = 'rk'; rk.textContent = String(i + 1);
+      var main = document.createElement('div'); main.className = 'main';
+      var nm = document.createElement('div'); nm.className = 'nm'; nm.textContent = en.name;
+      if (en.guest) {
+        nm.appendChild(document.createTextNode(' '));
+        var gt = document.createElement('span'); gt.className = 'gtag'; gt.textContent = 'guest';
+        nm.appendChild(gt);
+      }
+      main.appendChild(nm);
+      var parts = [];
+      GAMES.forEach(function (g) {
+        var v = en.games && en.games[g.key];
+        if (v) parts.push(SHORT[g.key] + ' ' + v);
+      });
+      if (parts.length) {
+        var brk = document.createElement('div'); brk.className = 'brk'; brk.textContent = parts.join(' · ');
+        main.appendChild(brk);
+      }
+      var sc = document.createElement('span'); sc.className = 'sc'; sc.textContent = String(en.total);
+      row.appendChild(rk); row.appendChild(main); row.appendChild(sc);
+      lbList.appendChild(row);
+    });
+  }
+  function loadBoards() {
+    window.DoGames.fetchBoards()
+      .then(function (j) {
+        if (!j || !j.ok) throw new Error('bad response');
+        cache = j;
+        renderBoard();
+      })
+      .catch(function () {
+        lbList.innerHTML = '<div class="lbmsg">Couldn\'t load the leaderboard — check your connection and try again.</div>';
+      });
+  }
+  tabWeek.addEventListener('click', function () { board = 'week'; renderBoard(); });
+  tabAll.addEventListener('click', function () { board = 'all'; renderBoard(); });
+  loadBoards();
+
+  window.__doGamesLobby = { games: GAMES, renderBoard: renderBoard, board: function () { return board; } };
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>Cookie Slice — DO Games</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="stylesheet" href="common.css">
+<style>.strike{color:#ff8a7a;font-weight:800;letter-spacing:3px}.strike .off{opacity:.2}</style>
+</head>
+<body>
+<div class="stage">
+  <div class="topbar">
+    <a class="back" href="index.html">‹ Lobby</a>
+    <span class="gtitle">Cookie Slice</span>
+    <div class="hud">
+      <div class="hud-box"><div class="lbl">Score</div><div class="val" id="scoreVal">0</div></div>
+      <div class="hud-box"><div class="lbl">Time</div><div class="val" id="timeVal">45</div></div>
+      <div class="hud-box"><div class="lbl">Strikes</div><div class="val"><span class="strike" id="strikeVal"></span></div></div>
+    </div>
+  </div>
+  <div class="playfield">
+    <canvas class="game" id="game"></canvas>
+
+    <div class="overlay" id="menuScreen">
+      <div class="big">Cookie Slice</div>
+      <div class="howto">
+        Cookies fly up — <b>swipe through them</b> to slice: <b>+10</b>, golden <b>+30</b>.<br>
+        A <span class="bad">burnt bomb</span> costs <span class="bad">−25 and a strike</span>. Three strikes end the run.<br>
+        Missing a cookie is fine. 45 seconds on the clock.
+      </div>
+      <div class="rowbtns"><button class="btn" id="playBtn" type="button">Play</button></div>
+      <div class="bestline" id="menuBest"></div>
+    </div>
+
+    <div class="overlay hidden" id="overScreen">
+      <div class="big" id="overTitle">Time!</div>
+      <div class="final">Final score<b id="finalScore">0</b></div>
+      <div class="bestline" id="overBest"></div>
+      <div class="status" id="submitStatus"></div>
+      <div class="rowbtns">
+        <button class="btn" id="againBtn" type="button">Play again</button>
+        <a class="btn ghost" href="index.html" style="text-decoration:none;display:inline-block">Lobby</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="common.js"></script>
+<script>
+(function () {
+  'use strict';
+  var canvas = document.getElementById('game');
+  var ctx = canvas.getContext('2d');
+  var scoreEl = document.getElementById('scoreVal');
+  var timeEl = document.getElementById('timeVal');
+  var strikeEl = document.getElementById('strikeVal');
+  var menuEl = document.getElementById('menuScreen');
+  var overEl = document.getElementById('overScreen');
+  var statusEl = document.getElementById('submitStatus');
+  var W = 0, H = 0;
+  var GRAV = 1500;
+
+  var G = {
+    state: 'menu', score: 0, strikes: 0, time: 0, spawnT: 0,
+    items: [], halves: [], trail: [], dragging: false, lastPt: null,
+    stats: null, submitted: false,
+  };
+
+  function resize() {
+    var r = canvas.parentElement.getBoundingClientRect();
+    var DPR = Math.min(2, window.devicePixelRatio || 1);
+    W = Math.max(280, r.width); H = Math.max(320, r.height);
+    canvas.width = Math.round(W * DPR); canvas.height = Math.round(H * DPR);
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  }
+  window.addEventListener('resize', resize);
+
+  function pickType() {
+    var r = Math.random();
+    if (r < 0.10) return 'golden';
+    if (r < 0.22) return 'bomb';
+    return 'cookie';
+  }
+  function spawnInterval() { return Math.max(0.42, 0.72 - G.time * 0.006); }
+  function spawnItem(type, x) {
+    var r = Math.max(17, Math.min(27, W * 0.055));
+    var it = {
+      type: type || pickType(), r: r,
+      x: (typeof x === 'number') ? x : (r + Math.random() * Math.max(1, W - r * 2)),
+      y: H + r + 4,
+      vx: (Math.random() - 0.5) * 130,
+      vy: -(H * 1.28 + Math.random() * H * 0.22),
+      rot: Math.random() * Math.PI * 2, vr: (Math.random() - 0.5) * 5,
+      sliced: false,
+    };
+    G.items.push(it);
+    return it;
+  }
+
+  function drawItemShape(x, y, r, type, rot) {
+    ctx.save(); ctx.translate(x, y); ctx.rotate(rot);
+    if (type === 'bomb') {
+      ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2);
+      ctx.fillStyle = '#3a3a3a'; ctx.fill();
+      ctx.lineWidth = 2.5; ctx.strokeStyle = '#191919'; ctx.stroke();
+      ctx.beginPath(); ctx.arc(-r * 0.3, -r * 0.3, r * 0.26, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(255,255,255,.22)'; ctx.fill();
+      ctx.strokeStyle = '#8a4f24'; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.moveTo(0, -r); ctx.quadraticCurveTo(r * 0.3, -r * 1.35, r * 0.55, -r * 1.2); ctx.stroke();
+      ctx.fillStyle = '#f5b921';
+      ctx.beginPath(); ctx.arc(r * 0.58, -r * 1.18, r * 0.14, 0, Math.PI * 2); ctx.fill();
+    } else {
+      if (type === 'golden') { ctx.shadowColor = '#f5b921'; ctx.shadowBlur = 14; }
+      ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2);
+      ctx.fillStyle = type === 'golden' ? '#f0b429' : '#c98a4b'; ctx.fill();
+      ctx.shadowBlur = 0;
+      ctx.lineWidth = 2; ctx.strokeStyle = '#8a4f24'; ctx.stroke();
+      ctx.fillStyle = '#4a2a12';
+      [[-0.35, -0.2], [0.3, -0.35], [0.05, 0.15], [-0.25, 0.4], [0.42, 0.3]].forEach(function (p) {
+        ctx.beginPath(); ctx.arc(p[0] * r, p[1] * r, r * 0.14, 0, Math.PI * 2); ctx.fill();
+      });
+    }
+    ctx.restore();
+  }
+
+  function distToSeg(px, py, x1, y1, x2, y2) {
+    var dx = x2 - x1, dy = y2 - y1;
+    var len2 = dx * dx + dy * dy;
+    var t = len2 ? Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / len2)) : 0;
+    var cx = x1 + t * dx, cy = y1 + t * dy;
+    return Math.hypot(px - cx, py - cy);
+  }
+
+  function trySlice(x1, y1, x2, y2) {
+    if (Math.hypot(x2 - x1, y2 - y1) < 6) return; // must be a swipe, not a tap
+    for (var i = 0; i < G.items.length; i++) {
+      var it = G.items[i];
+      if (it.sliced) continue;
+      if (distToSeg(it.x, it.y, x1, y1, x2, y2) < it.r + 4) {
+        it.sliced = true;
+        if (it.type === 'bomb') {
+          G.stats.bombs++; G.strikes++; G.score = Math.max(0, G.score - 25);
+          G.halves.push({ x: it.x, y: it.y, r: it.r, type: 'boom', t: 0 });
+          if (G.strikes >= 3) { endGame('strikes'); return; }
+        } else {
+          if (it.type === 'golden') { G.stats.golden++; G.score += 30; }
+          else { G.stats.sliced++; G.score += 10; }
+          G.halves.push({ x: it.x - 4, y: it.y, r: it.r, type: it.type, side: -1, vx: -70, vy: it.vy * 0.3, rot: it.rot, t: 0 });
+          G.halves.push({ x: it.x + 4, y: it.y, r: it.r, type: it.type, side: 1, vx: 70, vy: it.vy * 0.3, rot: it.rot, t: 0 });
+        }
+      }
+    }
+    syncHud();
+  }
+
+  function syncHud() {
+    scoreEl.textContent = String(G.score);
+    timeEl.textContent = String(Math.max(0, Math.ceil(45 - G.time)));
+    strikeEl.innerHTML = '';
+    for (var i = 0; i < 3; i++) {
+      var s = document.createElement('span');
+      s.textContent = 'X';
+      if (i >= G.strikes) s.className = 'off';
+      strikeEl.appendChild(s);
+    }
+  }
+
+  function startGame() {
+    G.state = 'playing'; G.score = 0; G.strikes = 0; G.time = 0; G.spawnT = 0.25;
+    G.items = []; G.halves = []; G.trail = []; G.submitted = false;
+    G.stats = { sliced: 0, golden: 0, bombs: 0 };
+    menuEl.classList.add('hidden'); overEl.classList.add('hidden');
+    syncHud();
+  }
+
+  function endGame(reason) {
+    if (G.state !== 'playing') return;
+    G.state = 'over';
+    var durationMs = Math.round(G.time * 1000);
+    document.getElementById('overTitle').textContent = reason === 'strikes' ? 'Three strikes!' : 'Time!';
+    document.getElementById('finalScore').textContent = String(G.score);
+    var best = window.DoGames.saveLocalBest('slice', G.score);
+    document.getElementById('overBest').textContent = 'Best: ' + best;
+    overEl.classList.remove('hidden');
+    window.DoGames.submitRun('slice', {
+      sliced: G.stats.sliced, golden: G.stats.golden, bombs: G.stats.bombs, durationMs: durationMs,
+    }, statusEl);
+  }
+
+  function update(dt) {
+    for (var h = G.halves.length - 1; h >= 0; h--) {
+      var hv = G.halves[h];
+      hv.t += dt;
+      if (hv.type !== 'boom') { hv.x += hv.vx * dt; hv.vy += GRAV * dt; hv.y += hv.vy * dt; hv.rot += hv.side * 3 * dt; }
+      if (hv.t > 0.8) G.halves.splice(h, 1);
+    }
+    for (var t = G.trail.length - 1; t >= 0; t--) {
+      G.trail[t].t += dt;
+      if (G.trail[t].t > 0.16) G.trail.splice(t, 1);
+    }
+    if (G.state !== 'playing') return;
+    G.time += dt;
+    G.spawnT -= dt;
+    if (G.spawnT <= 0) { spawnItem(); G.spawnT = spawnInterval() * (0.8 + Math.random() * 0.45); }
+    for (var i = G.items.length - 1; i >= 0; i--) {
+      var it = G.items[i];
+      it.vy += GRAV * dt; it.x += it.vx * dt; it.y += it.vy * dt; it.rot += it.vr * dt;
+      if (it.y - it.r > H + 30 || it.x < -60 || it.x > W + 60) G.items.splice(i, 1);
+    }
+    G.items = G.items.filter(function (it) { return !it.sliced; });
+    syncHud();
+    if (G.time >= 45) endGame('time');
+  }
+
+  function render() {
+    ctx.clearRect(0, 0, W, H);
+    for (var i = 0; i < G.items.length; i++) {
+      if (!G.items[i].sliced) drawItemShape(G.items[i].x, G.items[i].y, G.items[i].r, G.items[i].type, G.items[i].rot);
+    }
+    for (var h = 0; h < G.halves.length; h++) {
+      var hv = G.halves[h];
+      if (hv.type === 'boom') {
+        ctx.save();
+        ctx.globalAlpha = Math.max(0, 1 - hv.t / 0.8);
+        ctx.strokeStyle = '#e2483a'; ctx.lineWidth = 5; ctx.lineCap = 'round';
+        for (var q = 0; q < 8; q++) {
+          var ang = q * Math.PI / 4 + hv.t * 2;
+          ctx.beginPath();
+          ctx.moveTo(hv.x + Math.cos(ang) * hv.r * 0.3, hv.y + Math.sin(ang) * hv.r * 0.3);
+          ctx.lineTo(hv.x + Math.cos(ang) * hv.r * (1 + hv.t), hv.y + Math.sin(ang) * hv.r * (1 + hv.t));
+          ctx.stroke();
+        }
+        ctx.beginPath(); ctx.arc(hv.x, hv.y, hv.r * 0.4, 0, Math.PI * 2);
+        ctx.fillStyle = '#f5b921'; ctx.fill();
+        ctx.restore();
+      } else {
+        ctx.save();
+        ctx.translate(hv.x, hv.y); ctx.rotate(hv.rot);
+        ctx.globalAlpha = Math.max(0, 1 - hv.t / 0.8);
+        ctx.beginPath();
+        if (hv.side < 0) ctx.arc(0, 0, hv.r, Math.PI / 2, Math.PI * 1.5);
+        else ctx.arc(0, 0, hv.r, -Math.PI / 2, Math.PI / 2);
+        ctx.closePath();
+        ctx.fillStyle = hv.type === 'golden' ? '#f0b429' : '#c98a4b'; ctx.fill();
+        ctx.lineWidth = 2; ctx.strokeStyle = '#8a4f24'; ctx.stroke();
+        ctx.restore();
+      }
+    }
+    if (G.trail.length > 1) {
+      ctx.save();
+      ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+      for (var t = 1; t < G.trail.length; t++) {
+        var p0 = G.trail[t - 1], p1 = G.trail[t];
+        ctx.beginPath(); ctx.moveTo(p0.x, p0.y); ctx.lineTo(p1.x, p1.y);
+        ctx.lineWidth = 5 * (1 - p1.t / 0.16) + 1;
+        ctx.strokeStyle = 'rgba(247,234,215,' + (0.85 * (1 - p1.t / 0.16)) + ')';
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  var lastT = 0;
+  function frame(ts) {
+    var dt = Math.min(0.05, ((ts || 0) - lastT) / 1000 || 0.016);
+    lastT = ts || 0;
+    update(dt);
+    render();
+    window.requestAnimationFrame(frame);
+  }
+
+  function pt(e) {
+    var r = canvas.getBoundingClientRect();
+    var cx = e.clientX != null ? e.clientX : (e.touches && e.touches[0] ? e.touches[0].clientX : 0);
+    var cy = e.clientY != null ? e.clientY : (e.touches && e.touches[0] ? e.touches[0].clientY : 0);
+    return { x: cx - r.left, y: cy - r.top };
+  }
+  canvas.addEventListener('pointerdown', function (e) {
+    if (G.state !== 'playing') return;
+    G.dragging = true; G.lastPt = pt(e); G.trail = [{ x: G.lastPt.x, y: G.lastPt.y, t: 0 }];
+  }, { passive: true });
+  canvas.addEventListener('pointermove', function (e) {
+    if (G.state !== 'playing' || !G.dragging || !G.lastPt) return;
+    var p = pt(e);
+    trySlice(G.lastPt.x, G.lastPt.y, p.x, p.y);
+    G.trail.push({ x: p.x, y: p.y, t: 0 });
+    if (G.trail.length > 14) G.trail.shift();
+    G.lastPt = p;
+  }, { passive: true });
+  function endDrag() { G.dragging = false; G.lastPt = null; }
+  canvas.addEventListener('pointerup', endDrag);
+  canvas.addEventListener('pointercancel', endDrag);
+  canvas.addEventListener('touchmove', function (e) { if (G.state === 'playing') e.preventDefault(); }, { passive: false });
+
+  document.getElementById('playBtn').addEventListener('click', startGame);
+  document.getElementById('againBtn').addEventListener('click', startGame);
+  document.getElementById('menuBest').textContent = window.DoGames.localBest('slice') > 0 ? 'Best: ' + window.DoGames.localBest('slice') : '';
+  resize();
+  syncHud();
+  window.requestAnimationFrame(frame);
+
+  window.__doGame = { game: G, start: startGame, spawn: spawnItem, sliceSeg: trySlice, step: update, end: endGame };
+})();
+</script>
+</body>
+</html>

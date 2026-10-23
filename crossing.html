@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>Cookie Crossing — DO Games</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="stylesheet" href="common.css">
+<style>
+  .pad{display:flex;gap:6px;justify-content:center;padding:8px 0 calc(10px + env(safe-area-inset-bottom));z-index:5}
+  .pad button{
+    width:56px;height:44px;border-radius:12px;border:1px solid rgba(196,176,250,.4);cursor:pointer;
+    background:rgba(42,26,77,.85);color:var(--cream);font-family:inherit;
+  }
+  .pad button:active{background:var(--purple)}
+  .pad .arr{display:block;width:0;height:0;margin:0 auto;border-left:8px solid transparent;border-right:8px solid transparent}
+  .arr.up{border-bottom:13px solid var(--cream)}
+  .arr.down{border-top:13px solid var(--cream)}
+  .arr.left{border-top:8px solid transparent;border-bottom:8px solid transparent;border-right:13px solid var(--cream);border-left:none}
+  .arr.right{border-top:8px solid transparent;border-bottom:8px solid transparent;border-left:13px solid var(--cream);border-right:none}
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="topbar">
+    <a class="back" href="index.html">‹ Lobby</a>
+    <span class="gtitle">Cookie Crossing</span>
+    <div class="hud">
+      <div class="hud-box"><div class="lbl">Score</div><div class="val" id="scoreVal">0</div></div>
+      <div class="hud-box"><div class="lbl">Crossings</div><div class="val" id="crossVal">0</div></div>
+      <div class="hud-box"><div class="lbl">Lives</div><div class="val"><span class="lives-dots" id="livesDots"></span></div></div>
+    </div>
+  </div>
+  <div class="playfield">
+    <canvas class="game" id="game"></canvas>
+
+    <div class="overlay" id="menuScreen">
+      <div class="big">Cookie Crossing</div>
+      <div class="howto">
+        Weave across the bakery floor between the <b>rolling pins</b> and <b>mixers</b>.<br>
+        Each crossing banks <b>+50</b> — then everything speeds up.<br>
+        Get flattened and you lose a life. <b>3 lives.</b> Swipe, arrows, or the pad.
+      </div>
+      <div class="rowbtns"><button class="btn" id="playBtn" type="button">Play</button></div>
+      <div class="bestline" id="menuBest"></div>
+    </div>
+
+    <div class="overlay hidden" id="overScreen">
+      <div class="big">Flattened!</div>
+      <div class="final">Final score<b id="finalScore">0</b></div>
+      <div class="bestline" id="overBest"></div>
+      <div class="status" id="submitStatus"></div>
+      <div class="rowbtns">
+        <button class="btn" id="againBtn" type="button">Cross again</button>
+        <a class="btn ghost" href="index.html" style="text-decoration:none;display:inline-block">Lobby</a>
+      </div>
+    </div>
+  </div>
+  <div class="pad" id="pad">
+    <button type="button" data-dir="left"><span class="arr left"></span></button>
+    <button type="button" data-dir="up"><span class="arr up"></span></button>
+    <button type="button" data-dir="down"><span class="arr down"></span></button>
+    <button type="button" data-dir="right"><span class="arr right"></span></button>
+  </div>
+</div>
+
+<script src="common.js"></script>
+<script>
+(function () {
+  'use strict';
+  var LANES = 6;
+  var canvas = document.getElementById('game');
+  var ctx = canvas.getContext('2d');
+  var scoreEl = document.getElementById('scoreVal');
+  var crossEl = document.getElementById('crossVal');
+  var livesEl = document.getElementById('livesDots');
+  var menuEl = document.getElementById('menuScreen');
+  var overEl = document.getElementById('overScreen');
+  var statusEl = document.getElementById('submitStatus');
+  var W = 0, H = 0;
+
+  var G = {
+    state: 'menu', crossings: 0, lives: 3, elapsed: 0,
+    px: 0, py: 0, pr: 13, lanes: [], moveCd: 0, invuln: 0, submitted: false,
+  };
+
+  function zoneH() { return Math.max(40, H * 0.09); }
+  function laneH() { return (H - zoneH() * 2) / LANES; }
+  function laneY(i) { return zoneH() + i * laneH(); }
+  function startY() { return H - zoneH() / 2; }
+
+  function buildLanes() {
+    G.lanes = [];
+    var mult = Math.pow(1.12, G.crossings);
+    for (var i = 0; i < LANES; i++) {
+      var dir = i % 2 === 0 ? 1 : -1;
+      var kind = i % 2 === 0 ? 'pin' : 'mixer';
+      var base = (62 + ((i * 37) % 70)) * mult;
+      var obstacles = [];
+      var n = 2 + (i % 2);
+      for (var j = 0; j < n; j++) {
+        obstacles.push({
+          x: (j / n) * W + ((i * 53 + j * 97) % 60),
+          w: 58 + ((i * 29 + j * 41) % 46),
+        });
+      }
+      G.lanes.push({ dir: dir, kind: kind, speed: base, obstacles: obstacles });
+    }
+  }
+
+  function resize() {
+    var r = canvas.parentElement.getBoundingClientRect();
+    var DPR = Math.min(2, window.devicePixelRatio || 1);
+    W = Math.max(280, r.width); H = Math.max(320, r.height);
+    canvas.width = Math.round(W * DPR); canvas.height = Math.round(H * DPR);
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    if (!G.px) { G.px = W / 2; G.py = startY(); }
+    G.px = Math.max(G.pr, Math.min(W - G.pr, G.px));
+    G.py = Math.max(G.pr, Math.min(H - G.pr, G.py));
+  }
+  window.addEventListener('resize', resize);
+
+  function resetPlayer() { G.px = W / 2; G.py = startY(); G.invuln = 1.1; }
+
+  function syncHud() {
+    scoreEl.textContent = String(G.crossings * 50);
+    crossEl.textContent = String(G.crossings);
+    livesEl.innerHTML = '';
+    for (var i = 0; i < 3; i++) {
+      var d = document.createElement('span');
+      d.className = 'dot' + (i < G.lives ? '' : ' off');
+      livesEl.appendChild(d);
+    }
+  }
+
+  function startGame() {
+    G.state = 'playing'; G.crossings = 0; G.lives = 3; G.elapsed = 0; G.moveCd = 0; G.submitted = false;
+    buildLanes();
+    resetPlayer();
+    G.invuln = 0;
+    menuEl.classList.add('hidden'); overEl.classList.add('hidden');
+    syncHud();
+  }
+
+  function endGame() {
+    if (G.state !== 'playing') return;
+    G.state = 'over';
+    var durationMs = Math.round(G.elapsed * 1000);
+    document.getElementById('finalScore').textContent = String(G.crossings * 50);
+    var best = window.DoGames.saveLocalBest('crossing', G.crossings * 50);
+    document.getElementById('overBest').textContent = 'Best: ' + best + ' · ' + G.crossings + ' crossings';
+    overEl.classList.remove('hidden');
+    window.DoGames.submitRun('crossing', { crossings: G.crossings, durationMs: durationMs }, statusEl);
+  }
+
+  function move(dx, dy) {
+    if (G.state !== 'playing' || G.moveCd > 0) return;
+    var stepSize = laneH() * 0.92;
+    G.px = Math.max(G.pr, Math.min(W - G.pr, G.px + dx * stepSize));
+    G.py = Math.max(G.pr, Math.min(H - G.pr, G.py + dy * stepSize));
+    G.moveCd = 0.085;
+    if (G.py <= zoneH() * 0.62) {
+      G.crossings++;
+      buildLanes();
+      resetPlayer();
+      G.invuln = 0.6;
+      syncHud();
+    }
+  }
+
+  function update(dt) {
+    if (G.moveCd > 0) G.moveCd -= dt;
+    if (G.invuln > 0) G.invuln -= dt;
+    for (var i = 0; i < G.lanes.length; i++) {
+      var ln = G.lanes[i];
+      for (var j = 0; j < ln.obstacles.length; j++) {
+        var o = ln.obstacles[j];
+        o.x += ln.dir * ln.speed * dt;
+        if (ln.dir > 0 && o.x - o.w / 2 > W) o.x = -o.w / 2;
+        if (ln.dir < 0 && o.x + o.w / 2 < 0) o.x = W + o.w / 2;
+      }
+    }
+    if (G.state !== 'playing') return;
+    G.elapsed += dt;
+    // collision: player circle vs lane obstacle rects
+    if (G.invuln <= 0) {
+      for (var li = 0; li < LANES; li++) {
+        var lane = G.lanes[li];
+        var y0 = laneY(li), y1 = y0 + laneH();
+        if (G.py + G.pr * 0.55 < y0 || G.py - G.pr * 0.55 > y1) continue;
+        for (var oi = 0; oi < lane.obstacles.length; oi++) {
+          var ob = lane.obstacles[oi];
+          if (Math.abs(G.px - ob.x) < ob.w / 2 + G.pr * 0.55) {
+            G.lives--;
+            syncHud();
+            if (G.lives <= 0) { endGame(); return; }
+            resetPlayer();
+            return;
+          }
+        }
+      }
+    }
+  }
+
+  function drawObstacle(x, cy, w, kind) {
+    var h = laneH() * 0.52;
+    ctx.save(); ctx.translate(x, cy);
+    if (kind === 'pin') {
+      ctx.fillStyle = '#8a4f24';
+      ctx.fillRect(-w / 2 - 12, -3.5, 12, 7);
+      ctx.fillRect(w / 2, -3.5, 12, 7);
+      var g = ctx.createLinearGradient(0, -h / 2, 0, h / 2);
+      g.addColorStop(0, '#e9b872'); g.addColorStop(0.5, '#c98a4b'); g.addColorStop(1, '#8a4f24');
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.rect(-w / 2, -h / 2, w, h); ctx.fill();
+    } else {
+      ctx.fillStyle = '#6d5ba8';
+      ctx.beginPath(); ctx.rect(-w / 2, -h / 2, w, h * 0.62); ctx.fill();
+      ctx.strokeStyle = '#c4b0fa'; ctx.lineWidth = 2.5;
+      ctx.beginPath(); ctx.moveTo(-w * 0.2, h * 0.12); ctx.lineTo(-w * 0.28, h / 2); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(w * 0.2, h * 0.12); ctx.lineTo(w * 0.28, h / 2); ctx.stroke();
+      ctx.fillStyle = '#c4b0fa';
+      ctx.beginPath(); ctx.arc(0, -h * 0.2, 3.5, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  function render() {
+    ctx.clearRect(0, 0, W, H);
+    // finish zone (top) and start zone (bottom)
+    ctx.fillStyle = 'rgba(88,196,114,.20)';
+    ctx.fillRect(0, 0, W, zoneH());
+    ctx.fillStyle = 'rgba(139,92,246,.16)';
+    ctx.fillRect(0, H - zoneH(), W, zoneH());
+    ctx.fillStyle = 'rgba(247,234,215,.75)';
+    ctx.font = '700 12px -apple-system, sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText('FINISH — THE FAR COUNTER', W / 2, zoneH() / 2 + 4);
+    for (var i = 0; i < LANES; i++) {
+      if (i % 2) { ctx.fillStyle = 'rgba(196,176,250,.06)'; ctx.fillRect(0, laneY(i), W, laneH()); }
+      var ln = G.lanes[i];
+      for (var j = 0; j < ln.obstacles.length; j++) {
+        drawObstacle(ln.obstacles[j].x, laneY(i) + laneH() / 2, ln.obstacles[j].w, ln.kind);
+      }
+    }
+    // player: a brave cookie
+    if (G.state !== 'menu') {
+      ctx.save();
+      if (G.invuln > 0 && G.state === 'playing') ctx.globalAlpha = 0.45 + 0.3 * Math.sin(G.elapsed * 30);
+      ctx.beginPath(); ctx.arc(G.px, G.py, G.pr, 0, Math.PI * 2);
+      ctx.fillStyle = '#c98a4b'; ctx.fill();
+      ctx.lineWidth = 2; ctx.strokeStyle = '#8a4f24'; ctx.stroke();
+      ctx.fillStyle = '#4a2a12';
+      [[-4, -3], [4, -2], [0, 4]].forEach(function (p) {
+        ctx.beginPath(); ctx.arc(G.px + p[0], G.py + p[1], 2.4, 0, Math.PI * 2); ctx.fill();
+      });
+      ctx.restore();
+    }
+  }
+
+  var lastT = 0;
+  function frame(ts) {
+    var dt = Math.min(0.05, ((ts || 0) - lastT) / 1000 || 0.016);
+    lastT = ts || 0;
+    update(dt);
+    render();
+    window.requestAnimationFrame(frame);
+  }
+
+  var touchStart = null;
+  canvas.addEventListener('pointerdown', function (e) { touchStart = { x: e.clientX, y: e.clientY }; }, { passive: true });
+  canvas.addEventListener('pointerup', function (e) {
+    if (!touchStart) return;
+    var dx = e.clientX - touchStart.x, dy = e.clientY - touchStart.y;
+    touchStart = null;
+    if (Math.max(Math.abs(dx), Math.abs(dy)) < 16) return;
+    if (Math.abs(dx) > Math.abs(dy)) move(dx > 0 ? 1 : -1, 0); else move(0, dy > 0 ? 1 : -1);
+  }, { passive: true });
+  canvas.addEventListener('touchmove', function (e) { if (G.state === 'playing') e.preventDefault(); }, { passive: false });
+  document.querySelectorAll('#pad button').forEach(function (b) {
+    b.addEventListener('pointerdown', function (e) {
+      e.preventDefault();
+      var d = b.dataset.dir;
+      if (d === 'up') move(0, -1); else if (d === 'down') move(0, 1);
+      else if (d === 'left') move(-1, 0); else move(1, 0);
+    });
+  });
+  window.addEventListener('keydown', function (e) {
+    if (e.key === 'ArrowUp' || e.key === 'w') { move(0, -1); e.preventDefault(); }
+    else if (e.key === 'ArrowDown' || e.key === 's') { move(0, 1); e.preventDefault(); }
+    else if (e.key === 'ArrowLeft' || e.key === 'a') { move(-1, 0); e.preventDefault(); }
+    else if (e.key === 'ArrowRight' || e.key === 'd') { move(1, 0); e.preventDefault(); }
+    else if ((e.key === ' ' || e.key === 'Enter') && G.state !== 'playing') startGame();
+  });
+
+  document.getElementById('playBtn').addEventListener('click', startGame);
+  document.getElementById('againBtn').addEventListener('click', startGame);
+  document.getElementById('menuBest').textContent = window.DoGames.localBest('crossing') > 0 ? 'Best: ' + window.DoGames.localBest('crossing') : '';
+  resize();
+  buildLanes();
+  G.py = startY(); G.px = W / 2;
+  syncHud();
+  window.requestAnimationFrame(frame);
+
+  window.__doGame = { game: G, start: startGame, move: move, step: update, end: endGame };
+})();
+</script>
+</body>
+</html>
